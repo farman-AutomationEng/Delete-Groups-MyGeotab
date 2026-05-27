@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Cascade Delete Group</title>
+<style>
+  .cdg-root {
+    font-family: "Roboto", "Segoe UI", Arial, sans-serif;
+    color: #333;
+    padding: 20px;
+    max-width: 900px;
+  }
+  .cdg-root h2 { margin: 0 0 6px; font-weight: 500; }
+  .cdg-root h3 { margin: 18px 0 8px; font-weight: 500; font-size: 14px; color: #555; }
+  .cdg-root p.warn {
+    background: #fff4e5;
+    border-left: 3px solid #f5a623;
+    padding: 10px 12px;
+    margin: 10px 0 18px;
+    font-size: 13px;
+  }
+  .cdg-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .cdg-row label { font-size: 13px; min-width: 60px; }
+  .cdg-root select, .cdg-root button {
+    font: inherit; padding: 6px 10px; border: 1px solid #ccc;
+    border-radius: 3px; background: #fff;
+  }
+  .cdg-root select { min-width: 360px; }
+  .cdg-root button {
+    background: #4a90e2; color: #fff; border-color: #4a90e2;
+    cursor: pointer; padding: 6px 14px;
+  }
+  .cdg-root button:hover:not(:disabled) { background: #357ab8; }
+  .cdg-root button:disabled { background: #b0b0b0; border-color: #b0b0b0; cursor: not-allowed; }
+  .cdg-root button.danger { background: #d0021b; border-color: #d0021b; }
+  .cdg-root button.danger:hover:not(:disabled) { background: #a8001a; }
+  table.cdg-impact {
+    border-collapse: collapse; margin: 8px 0 14px; font-size: 13px; min-width: 380px;
+  }
+  table.cdg-impact th, table.cdg-impact td {
+    text-align: left; padding: 6px 12px; border-bottom: 1px solid #eee;
+  }
+  table.cdg-impact th { background: #f5f5f5; font-weight: 500; }
+  .cdg-confirm { margin: 10px 0; font-size: 13px; }
+  .cdg-confirm label { display: block; margin: 4px 0; }
+  .cdg-log {
+    background: #1e1e1e; color: #d4d4d4; font-family: "Consolas", "Monaco", monospace;
+    font-size: 12px; padding: 10px; border-radius: 3px; max-height: 320px;
+    overflow-y: auto; white-space: pre-wrap; line-height: 1.4;
+  }
+  .cdg-hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="cdg-root">
+  <h2>Cascade Delete Group</h2>
+  <p class="warn">
+    The selected group and all of its child groups will be deleted. Devices, users, rules, and zones that reference these groups will be <strong>unassigned</strong> (the entities themselves are not deleted, only the group reference is removed). If a device, user, or zone has no other group remaining, it will be moved to the "Company" group. <strong>This action cannot be undone.</strong>
+  </p>
+
+  <div class="cdg-row">
+    <label>Group:</label>
+    <select id="cdg-group"><option value="">Loading...</option></select>
+    <button id="cdg-analyze">Analyze Impact</button>
+  </div>
+
+  <div id="cdg-result" class="cdg-hidden">
+    <h3>Impact Summary</h3>
+    <table class="cdg-impact" id="cdg-impact-table"></table>
+
+    <div class="cdg-confirm">
+      <label><input type="checkbox" id="cdg-c1"> I understand this action is irreversible</label>
+      <label><input type="checkbox" id="cdg-c2"> All child groups will also be deleted</label>
+      <label><input type="checkbox" id="cdg-c3"> References will be removed and groups will be deleted</label>
+    </div>
+
+    <button id="cdg-delete" class="danger" disabled>Cascade Delete</button>
+  </div>
+
+  <div id="cdg-log-wrap" class="cdg-hidden">
+    <h3>Execution Log</h3>
+    <div id="cdg-log" class="cdg-log"></div>
+  </div>
+</div>
+
+<script>
+geotab.addin.cascadeDeleteGroup = function () {
+  'use strict';
+
+  const COMPANY_ID = 'GroupCompanyId';
+  let api = null;
+  let allGroups = [];
+  let analysis = null;
+
+  const $ = id => document.getElementById(id);
+
+  function log(msg, level) {
+    const el = $('cdg-log');
+    const color = level === 'err' ? '#f48771' : level === 'ok' ? '#6abe6a' : '#d4d4d4';
+    el.innerHTML += '<span style="color:' + color + '">' + msg + '</span>\n';
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function call(method, params) {
+    return new Promise((resolve, reject) =>
+      api.call(method, params, resolve, reject)
+    );
+  }
+
+  function multi(calls) {
+    return new Promise((resolve, reject) =>
+      api.multiCall(calls, resolve, reject)
+    );
+  }
+
+  // Build full path "Company > Region > Branch" for each group
+  function buildPaths(groups) {
+    const map = new Map(groups.map(g => [g.id, g]));
+    const parentOf = new Map();
+    for (const g of groups) {
+      for (const c of (g.children || [])) parentOf.set(c.id, g.id);
+    }
+    return groups.map(g => {
+      const parts = [];
+      let cur = g.id;
+      const seen = new Set();
+      while (cur && !seen.has(cur)) {
+        seen.add(cur);
+        const node = map.get(cur);
+        if (!node) break;
+        parts.unshift(node.name || '(unnamed)');
+        cur = parentOf.get(cur);
+      }
+      return { id: g.id, name: g.name, path: parts.join(' > ') };
+    });
+  }
+
+  async function loadGroups() {
+    const sel = $('cdg-group');
+    sel.innerHTML = '<option value="">Loading...</option>';
+    try {
+      allGroups = await call('Get', { typeName: 'Group' });
+      const paths = buildPaths(allGroups)
+        // Exclude system groups (CompanyId, PrivateUserId, etc.)
+        .filter(g => g.id !== COMPANY_ID && !String(g.id).startsWith('Group'))
+        .sort((a, b) => a.path.localeCompare(b.path));
+
+      sel.innerHTML = '<option value="">-- Select a group --</option>';
+      for (const p of paths) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.path;
+        sel.appendChild(opt);
+      }
+    } catch (e) {
+      sel.innerHTML = '<option value="">Error loading</option>';
+      alert('Failed to load groups: ' + (e.message || e));
+    }
+  }
+
+  // Return the target group plus all of its descendants
+  function descendantsOf(rootId) {
+    const map = new Map(allGroups.map(g => [g.id, g]));
+    const out = [];
+    const seen = new Set();
+    (function walk(id) {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const g = map.get(id);
+      if (!g) return;
+      out.push(g);
+      for (const c of (g.children || [])) walk(c.id);
+    })(rootId);
+    return out;
+  }
+
+  async function analyze() {
+    const id = $('cdg-group').value;
+    if (!id) { alert('Please select a group first'); return; }
+
+    $('cdg-result').classList.add('cdg-hidden');
+    $('cdg-log-wrap').classList.remove('cdg-hidden');
+    $('cdg-log').innerHTML = '';
+    log('Fetching devices, users, rules, zones...');
+
+    let devices, users, rules, zones;
+    try {
+      [devices, users, rules, zones] = await Promise.all([
+        call('Get', { typeName: 'Device' }),
+        call('Get', { typeName: 'User' }),
+        call('Get', { typeName: 'Rule' }),
+        call('Get', { typeName: 'Zone' })
+      ]);
+    } catch (e) {
+      log('Failed: ' + (e.message || e), 'err');
+      return;
+    }
+
+    const groupsToDelete = descendantsOf(id);
+    const targetIds = new Set(groupsToDelete.map(g => g.id));
+
+    const affectedDevices = devices.filter(d => (d.groups || []).some(g => targetIds.has(g.id)));
+    const affectedUsers   = users.filter(u => (u.companyGroups || []).some(g => targetIds.has(g.id)));
+    const affectedRules   = rules.filter(r => (r.groups || []).some(g => targetIds.has(g.id)));
+    const affectedZones   = zones.filter(z => (z.groups || []).some(g => targetIds.has(g.id)));
+
+    analysis = { groupsToDelete, targetIds, affectedDevices, affectedUsers, affectedRules, affectedZones };
+
+    const tbl = $('cdg-impact-table');
+    tbl.innerHTML =
+      '<tr><th>Item</th><th>Count</th></tr>' +
+      '<tr><td>Groups to delete (incl. children)</td><td>' + groupsToDelete.length + '</td></tr>' +
+      '<tr><td>Devices to unassign</td><td>' + affectedDevices.length + '</td></tr>' +
+      '<tr><td>Users to unassign</td><td>' + affectedUsers.length + '</td></tr>' +
+      '<tr><td>Rules to update</td><td>' + affectedRules.length + '</td></tr>' +
+      '<tr><td>Zones to unassign</td><td>' + affectedZones.length + '</td></tr>';
+
+    $('cdg-result').classList.remove('cdg-hidden');
+    $('cdg-c1').checked = $('cdg-c2').checked = $('cdg-c3').checked = false;
+    updateDeleteBtn();
+    log('Analysis complete.', 'ok');
+  }
+
+  function updateDeleteBtn() {
+    $('cdg-delete').disabled = !($('cdg-c1').checked && $('cdg-c2').checked && $('cdg-c3').checked);
+  }
+
+  function stripGroups(arr, targets) {
+    return (arr || []).filter(g => !targets.has(g.id));
+  }
+
+  async function execute() {
+    if (!analysis) return;
+    $('cdg-delete').disabled = true;
+    $('cdg-analyze').disabled = true;
+
+    const { groupsToDelete, targetIds, affectedDevices, affectedUsers, affectedRules, affectedZones } = analysis;
+
+    try {
+      // 1. Devices — unassign target groups, default to Company if empty
+      if (affectedDevices.length) {
+        log('Updating ' + affectedDevices.length + ' devices...');
+        const calls = affectedDevices.map(d => {
+          const ng = stripGroups(d.groups, targetIds);
+          if (!ng.length) ng.push({ id: COMPANY_ID });
+          return ['Set', { typeName: 'Device', entity: Object.assign({}, d, { groups: ng }) }];
+        });
+        await multi(calls);
+        log('  devices done', 'ok');
+      }
+
+      // 2. Users — same logic on companyGroups
+      if (affectedUsers.length) {
+        log('Updating ' + affectedUsers.length + ' users...');
+        const calls = affectedUsers.map(u => {
+          const ng = stripGroups(u.companyGroups, targetIds);
+          if (!ng.length) ng.push({ id: COMPANY_ID });
+          return ['Set', { typeName: 'User', entity: Object.assign({}, u, { companyGroups: ng }) }];
+        });
+        await multi(calls);
+        log('  users done', 'ok');
+      }
+
+      // 3. Rules — groups array can be empty (means "applies to all")
+      if (affectedRules.length) {
+        log('Updating ' + affectedRules.length + ' rules...');
+        const calls = affectedRules.map(r => {
+          const ng = stripGroups(r.groups, targetIds);
+          return ['Set', { typeName: 'Rule', entity: Object.assign({}, r, { groups: ng }) }];
+        });
+        await multi(calls);
+        log('  rules done', 'ok');
+      }
+
+      // 4. Zones
+      if (affectedZones.length) {
+        log('Updating ' + affectedZones.length + ' zones...');
+        const calls = affectedZones.map(z => {
+          const ng = stripGroups(z.groups, targetIds);
+          if (!ng.length) ng.push({ id: COMPANY_ID });
+          return ['Set', { typeName: 'Zone', entity: Object.assign({}, z, { groups: ng }) }];
+        });
+        await multi(calls);
+        log('  zones done', 'ok');
+      }
+
+      // 5. Delete groups — post-order DFS so children are removed before parents
+      const map = new Map(groupsToDelete.map(g => [g.id, g]));
+      const order = [];
+      const visited = new Set();
+      (function dfs(g) {
+        if (visited.has(g.id)) return;
+        visited.add(g.id);
+        for (const c of (g.children || [])) {
+          if (map.has(c.id)) dfs(map.get(c.id));
+        }
+        order.push(g);
+      })(groupsToDelete[0]);
+      // Pick up any disconnected nodes that DFS missed
+      for (const g of groupsToDelete) if (!visited.has(g.id)) order.push(g);
+
+      log('Deleting ' + order.length + ' groups (children first)...');
+      let okCount = 0, failCount = 0;
+      for (const g of order) {
+        try {
+          await call('Remove', { typeName: 'Group', entity: { id: g.id } });
+          log('  ✓ ' + (g.name || g.id), 'ok');
+          okCount++;
+        } catch (e) {
+          log('  ✗ ' + (g.name || g.id) + ' — ' + (e.message || e), 'err');
+          failCount++;
+        }
+      }
+
+      log('Done. Deleted: ' + okCount + ', Failed: ' + failCount, failCount ? 'err' : 'ok');
+
+      // Refresh the dropdown and reset state
+      await loadGroups();
+      $('cdg-result').classList.add('cdg-hidden');
+      analysis = null;
+    } catch (e) {
+      log('FATAL: ' + (e.message || e), 'err');
+    } finally {
+      $('cdg-analyze').disabled = false;
+    }
+  }
+
+  return {
+    initialize: function (geotabApi, state, cb) {
+      api = geotabApi;
+      $('cdg-analyze').addEventListener('click', analyze);
+      $('cdg-delete').addEventListener('click', () => {
+        if (!confirm('Final warning: cascade delete will now run. Continue?')) return;
+        execute();
+      });
+      $('cdg-c1').addEventListener('change', updateDeleteBtn);
+      $('cdg-c2').addEventListener('change', updateDeleteBtn);
+      $('cdg-c3').addEventListener('change', updateDeleteBtn);
+      cb();
+    },
+    focus: function (geotabApi /*, state */) {
+      api = geotabApi;
+      loadGroups();
+    },
+    blur: function () { /* no-op */ }
+  };
+};
+</script>
+</body>
+</html>

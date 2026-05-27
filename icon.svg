@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Three people / group icon -->
+  <circle cx="9" cy="7" r="3"/>
+  <path d="M3 20c0-3 3-5 6-5s6 2 6 5"/>
+  <circle cx="17" cy="6" r="2"/>
+  <path d="M15 12c2 0 4 1.2 4 3"/>
+  <!-- Delete X overlay in red -->
+  <g stroke="#d0021b" stroke-width="2.2">
+    <line x1="17.5" y1="14.5" x2="22.5" y2="19.5"/>
+    <line x1="22.5" y1="14.5" x2="17.5" y2="19.5"/>
+  </g>
+</svg>

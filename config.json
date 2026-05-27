@@ -1,0 +1,16 @@
+{
+  "name": "Cascade Delete Group",
+  "supportEmail": "farman@dynastync.com",
+  "version": "1.0.0",
+  "items": [
+    {
+      "url": "https://farman-automationeng.github.io/Delete-Groups-MyGeotab/index.html",
+      "path": "AdministrationLink/",
+      "menuName": {
+        "en": "Cascade Delete Group"
+      },
+      "icon": "https://farman-automationeng.github.io/Delete-Groups-MyGeotab/icon.svg"
+    }
+  ],
+  "isSigned": false
+}
