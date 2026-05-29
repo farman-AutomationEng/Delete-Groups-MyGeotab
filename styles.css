@@ -249,32 +249,113 @@ table.impact tbody td:last-child {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Banner (matches zen-banner from @geotab/zenith) ────── */
+/* ── Banner (matches @geotab/zenith zen-banner) ──────────── */
 .notice {
-  background: var(--accent-warning-bg);
-  color: var(--accent-warning-detail);
   min-height: 48px;
   display: flex;
   align-items: center;
-  padding: 12px 16px;
+  padding: 8px 8px 8px 16px;
   border-radius: var(--radius);
-  font-size: 14px;
-  line-height: 20px;
   margin-bottom: 16px;
-}
-.notice.nred {
-  background: var(--accent-error-bg);
-  color: var(--accent-error-detail);
 }
 .notice.nblue {
   background: var(--accent-general-bg);
   color: var(--accent-general-detail);
+  fill: var(--accent-general-detail);
+}
+.notice.nred {
+  background: var(--accent-error-bg);
+  color: var(--accent-error-detail);
+  fill: var(--accent-error-detail);
 }
 .notice.ngreen {
   background: var(--accent-success-bg);
   color: var(--accent-success-detail);
+  fill: var(--accent-success-detail);
 }
-.notice strong { font-weight: 500; }
+.notice.nyellow {
+  background: var(--accent-warning-bg);
+  color: var(--accent-warning-detail);
+  fill: var(--accent-warning-detail);
+}
+
+/* Banner icon block — Zenith spec: padding-right 8px */
+.notice-icon {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+  flex-shrink: 0;
+}
+
+/* Banner body holds title + message */
+.notice-body {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+
+/* zen-banner__header — 14px / weight 500 / line-height 16px / letter-spacing 0.16px */
+.notice-title {
+  font-family: var(--main-font);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.16px;
+  line-height: 16px;
+}
+
+/* zen-banner__message — 12px / weight 400 / line-height 16px / letter-spacing 0.32px */
+.notice-msg {
+  font-family: var(--main-font);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.32px;
+  line-height: 16px;
+}
+
+/* zen-banner__close-button — 24x24 circular, hover fills detail color */
+.notice-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 15px;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 8px;
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+  flex-shrink: 0;
+  transition: background-color .12s;
+}
+.notice.nblue .notice-close:hover,
+.notice.nblue .notice-close:focus,
+.notice.nblue .notice-close:active {
+  background: var(--accent-general-detail);
+  fill: var(--accent-general-bg);
+}
+.notice.nred .notice-close:hover,
+.notice.nred .notice-close:focus,
+.notice.nred .notice-close:active {
+  background: var(--accent-error-detail);
+  fill: var(--accent-error-bg);
+}
+.notice.ngreen .notice-close:hover,
+.notice.ngreen .notice-close:focus,
+.notice.ngreen .notice-close:active {
+  background: var(--accent-success-detail);
+  fill: var(--accent-success-bg);
+}
+.notice.nyellow .notice-close:hover,
+.notice.nyellow .notice-close:focus,
+.notice.nyellow .notice-close:active {
+  background: var(--accent-warning-detail);
+  fill: var(--accent-warning-bg);
+}
 
 /* ── Buttons (zen-button pattern) ───────────────────────── */
 .sa { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
