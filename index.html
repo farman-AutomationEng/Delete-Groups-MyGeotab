@@ -50,7 +50,7 @@
 
     <div class="cg">
       <label class="ci"><input type="checkbox" id="cdg-c1"> I understand this action is irreversible</label>
-      <label class="ci"><input type="checkbox" id="cdg-c2"> All child group will also be deleted</label>
+      <label class="ci"><input type="checkbox" id="cdg-c2"> All child groups will also be deleted</label>
       <label class="ci"><input type="checkbox" id="cdg-c3"> References will be removed and groups deleted</label>
     </div>
 
@@ -215,7 +215,13 @@
       const targetIds = new Set(groupsToDelete.map(function (g) { return g.id; }));
 
       const affectedDevices = devices.filter(function (d) { return (d.groups || []).some(function (g) { return targetIds.has(g.id); }); });
-      const affectedUsers   = users.filter(function (u) { return (u.companyGroups || []).some(function (g) { return targetIds.has(g.id); }); });
+      // Users: check BOTH companyGroups and driverGroups — Geotab enforces
+      // driverGroups must be descendants of companyGroups, so we must update both together.
+      const affectedUsers   = users.filter(function (u) {
+        const inCompany = (u.companyGroups || []).some(function (g) { return targetIds.has(g.id); });
+        const inDriver  = (u.driverGroups  || []).some(function (g) { return targetIds.has(g.id); });
+        return inCompany || inDriver;
+      });
       const affectedRules   = rules.filter(function (r) { return (r.groups || []).some(function (g) { return targetIds.has(g.id); }); });
       const affectedZones   = zones.filter(function (z) { return (z.groups || []).some(function (g) { return targetIds.has(g.id); }); });
 
@@ -278,13 +284,20 @@
           logLine('  devices done', 'ok');
         }
 
-        // 2. Users — same logic on companyGroups
+        // 2. Users — strip target groups from BOTH companyGroups and driverGroups
+        // (Geotab requires driverGroups to be descendants of companyGroups; updating
+        // only one would violate that constraint and the entire batch would fail.)
         if (affectedUsers.length) {
           logLine('Updating ' + affectedUsers.length + ' users...');
           const calls = affectedUsers.map(function (u) {
-            const ng = stripGroups(u.companyGroups, targetIds);
-            if (!ng.length) ng.push({ id: COMPANY_ID });
-            return ['Set', { typeName: 'User', entity: Object.assign({}, u, { companyGroups: ng }) }];
+            const newCompany = stripGroups(u.companyGroups, targetIds);
+            if (!newCompany.length) newCompany.push({ id: COMPANY_ID });
+            const updates = { companyGroups: newCompany };
+            // Drivers carry driverGroups; strip the same target IDs from there too.
+            if (u.driverGroups) {
+              updates.driverGroups = stripGroups(u.driverGroups, targetIds);
+            }
+            return ['Set', { typeName: 'User', entity: Object.assign({}, u, updates) }];
           });
           await multi(calls);
           logLine('  users done', 'ok');
