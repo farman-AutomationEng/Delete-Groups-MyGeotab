@@ -75,61 +75,59 @@ body {
   font-family: var(--main-font);
   font-size: 14px;
   line-height: 20px;
-  background: var(--bg-content-1);
+  background: var(--bg-main);
   color: var(--text-primary);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── Header (page brand bar) ────────────────────────────── */
+/* ── Page title (MyGeotab native style — see Assets, Users, etc.) ── */
 .hdr {
-  background: var(--bg-primary-brand);
-  padding: 0 16px;
-  height: 52px;
+  background: var(--bg-main);
+  padding: 14px 24px;
+  min-height: 64px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  border-bottom: 1px solid var(--border-general);
   position: sticky;
   top: 0;
   z-index: 100;
 }
 .hdr .ht h1 {
   font-family: var(--main-font);
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--text-reverse-primary);
-  letter-spacing: 0.16px;
-  line-height: 24px;
+  font-size: 28px;
+  font-weight: 400;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+  line-height: 36px;
 }
 .hdr .ht p {
   font-size: 12px;
   font-weight: 400;
-  color: #c0ccd8;
+  color: var(--text-secondary);
   letter-spacing: 0.32px;
   line-height: 16px;
-  margin-top: 1px;
+  margin-top: 2px;
 }
 .dbadge {
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--text-reverse-primary);
+  background: var(--bg-main);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 400;
   padding: 4px 10px;
   border-radius: var(--radius);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid var(--border-general);
   letter-spacing: 0.32px;
   line-height: 16px;
 }
 
-/* ── Card ───────────────────────────────────────────────── */
+/* ── Card (content area below page title) ──────────────── */
 .card {
   background: var(--bg-main);
-  max-width: 880px;
-  margin: 16px auto 40px;
-  border-radius: var(--radius-card);
-  padding: 20px 20px 24px;
-  border: 1px solid var(--border-general);
-  box-shadow: var(--shadow-card);
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
 }
 
 /* ── Section header ─────────────────────────────────────── */
