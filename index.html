@@ -15,8 +15,21 @@
 
 <div class="card">
 
-  <div class="notice nred">
-    <strong>Warning:</strong> The selected group and all of its child groups will be deleted. Devices, users, rules, and zones that reference these groups will be unassigned (entities are not deleted, only the group reference is removed). If an entity has no other group remaining, it will be moved to the Company group. This action cannot be undone.
+  <div class="notice nblue" id="cdg-banner">
+    <span class="notice-icon">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M8 1.5C4.4 1.5 1.5 4.4 1.5 8s2.9 6.5 6.5 6.5 6.5-2.9 6.5-6.5S11.6 1.5 8 1.5zm0 12c-3 0-5.5-2.5-5.5-5.5S5 2.5 8 2.5s5.5 2.5 5.5 5.5-2.5 5.5-5.5 5.5zM8 4.5a.875.875 0 100 1.75A.875.875 0 008 4.5zM7.25 7v5h1.5V7h-1.5z"/>
+      </svg>
+    </span>
+    <div class="notice-body">
+      <span class="notice-title">Cascade delete is irreversible.</span>
+      <span class="notice-msg">The selected group and all of its child groups will be permanently deleted. Devices, users, rules, and zones that reference these groups will be unassigned. If an entity has no other group remaining, it will be moved to the Company group.</span>
+    </div>
+    <button id="cdg-banner-close" class="notice-close" type="button" aria-label="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
+        <path d="M9.4 1.4L8 0 5 3 2 0 .6 1.4 3.6 4.4.6 7.4 2 8.8l3-3 3 3 1.4-1.4-3-3z"/>
+      </svg>
+    </button>
   </div>
 
   <div class="sec"><h3>Select Group</h3></div>
@@ -521,6 +534,9 @@
         $('cdg-c1').addEventListener('change', updateDeleteBtn);
         $('cdg-c2').addEventListener('change', updateDeleteBtn);
         $('cdg-c3').addEventListener('change', updateDeleteBtn);
+        $('cdg-banner-close').addEventListener('click', function () {
+          $('cdg-banner').classList.add('hidden');
+        });
         cb();
       },
       focus: function (geotabApi /*, state */) {
