@@ -204,7 +204,7 @@
         catch (e) { logLine('  (' + typeName + ' skipped: ' + (e.message || e) + ')'); return []; }
       }
 
-      let devices, users, rules, zones, trailers, customReports, distLists, mediaFiles, workHolidays;
+      let devices, users, rules, zones, trailers, customReports, distLists, mediaFiles, workHolidays, routes, hosRuleSets;
       try {
         const results = await Promise.all([
           call('Get', { typeName: 'Device' }),
@@ -215,7 +215,9 @@
           safeGet('CustomReportSchedule'),
           safeGet('DistributionList'),
           safeGet('MediaFile'),
-          safeGet('WorkHoliday')
+          safeGet('WorkHoliday'),
+          safeGet('Route'),
+          safeGet('HOSRuleSet')
         ]);
         devices       = results[0];
         users         = results[1];
@@ -226,6 +228,8 @@
         distLists     = results[6];
         mediaFiles    = results[7];
         workHolidays  = results[8];
+        routes        = results[9];
+        hosRuleSets   = results[10];
       } catch (e) {
         logLine('Failed: ' + (e.message || e), 'err');
         return;
@@ -253,6 +257,8 @@
       const affectedDistLists     = distLists.filter(hasTargetGroup);
       const affectedMediaFiles    = mediaFiles.filter(hasTargetGroup);
       const affectedWorkHolidays  = workHolidays.filter(hasTargetGroup);
+      const affectedRoutes        = routes.filter(hasTargetGroup);
+      const affectedHOSRuleSets   = hosRuleSets.filter(hasTargetGroup);
 
       analysis = {
         groupsToDelete: groupsToDelete,
@@ -265,7 +271,9 @@
         affectedCustomReports: affectedCustomReports,
         affectedDistLists: affectedDistLists,
         affectedMediaFiles: affectedMediaFiles,
-        affectedWorkHolidays: affectedWorkHolidays
+        affectedWorkHolidays: affectedWorkHolidays,
+        affectedRoutes: affectedRoutes,
+        affectedHOSRuleSets: affectedHOSRuleSets
       };
 
       renderImpact([
@@ -278,7 +286,9 @@
         { label: 'Custom Reports to update',           count: affectedCustomReports.length },
         { label: 'Distribution Lists to update',       count: affectedDistLists.length },
         { label: 'Media Files to update',              count: affectedMediaFiles.length },
-        { label: 'Work Holidays to update',            count: affectedWorkHolidays.length }
+        { label: 'Work Holidays to update',            count: affectedWorkHolidays.length },
+        { label: 'Routes to update',                   count: affectedRoutes.length },
+        { label: 'HOS Rule Sets to update',            count: affectedHOSRuleSets.length }
       ]);
 
       $('cdg-result').classList.remove('hidden');
@@ -314,6 +324,8 @@
       const affectedDistLists     = analysis.affectedDistLists;
       const affectedMediaFiles    = analysis.affectedMediaFiles;
       const affectedWorkHolidays  = analysis.affectedWorkHolidays;
+      const affectedRoutes        = analysis.affectedRoutes;
+      const affectedHOSRuleSets   = analysis.affectedHOSRuleSets;
 
       // Generic helper: strip target groups from a list of entities' `groups` field.
       // Each type runs in its own try/catch so one batch failure does not abort the whole flow.
@@ -331,6 +343,56 @@
         } catch (err) {
           logLine('  ' + typeName + ' update failed: ' + (err.message || err), 'err');
           logLine('  (continuing to next type)', 'info');
+        }
+      }
+
+      // Diagnostic: when a group fails to delete, scan all known entity types
+      // and report which ones still reference the failed group(s).
+      async function diagnoseGroup(groupId, groupName) {
+        logLine('');
+        logLine('Diagnosing remaining references for "' + groupName + '":');
+
+        const checks = [
+          { label: 'Device',                type: 'Device',                field: 'groups' },
+          { label: 'User (companyGroups)',  type: 'User',                  field: 'companyGroups' },
+          { label: 'User (driverGroups)',   type: 'User',                  field: 'driverGroups' },
+          { label: 'Rule',                  type: 'Rule',                  field: 'groups' },
+          { label: 'ExceptionRule',         type: 'ExceptionRule',         field: 'groups' },
+          { label: 'Zone',                  type: 'Zone',                  field: 'groups' },
+          { label: 'Trailer',               type: 'Trailer',               field: 'groups' },
+          { label: 'CustomReportSchedule',  type: 'CustomReportSchedule',  field: 'groups' },
+          { label: 'DistributionList',      type: 'DistributionList',      field: 'groups' },
+          { label: 'MediaFile',             type: 'MediaFile',             field: 'groups' },
+          { label: 'WorkHoliday',           type: 'WorkHoliday',           field: 'groups' },
+          { label: 'WorkTime',              type: 'WorkTime',              field: 'groups' },
+          { label: 'Route',                 type: 'Route',                 field: 'groups' },
+          { label: 'HOSRuleSet',            type: 'HOSRuleSet',            field: 'groups' },
+          { label: 'TextMessage',           type: 'TextMessage',           field: 'groups' },
+          { label: 'ShipmentLog',           type: 'ShipmentLog',           field: 'groups' },
+          { label: 'DefectSeverity',        type: 'DefectSeverity',        field: 'groups' }
+        ];
+
+        let foundAny = false;
+        for (const chk of checks) {
+          try {
+            const items = await call('Get', { typeName: chk.type });
+            const refs = items.filter(function (x) {
+              return (x[chk.field] || []).some(function (g) { return g.id === groupId; });
+            });
+            if (refs.length > 0) {
+              foundAny = true;
+              const names = refs.slice(0, 3).map(function (r) { return r.name || r.id; }).join(', ');
+              const suffix = refs.length > 3 ? ' (+' + (refs.length - 3) + ' more)' : '';
+              logLine('  ' + chk.label + ': ' + refs.length + ' reference(s) — ' + names + suffix, 'err');
+            }
+          } catch (e) {
+            // Type not supported in this database — skip silently
+          }
+        }
+
+        if (!foundAny) {
+          logLine('  No references found in known entity types.', 'info');
+          logLine('  Group may be locked by a system process or custom add-in data.', 'info');
         }
       }
 
@@ -382,7 +444,13 @@
         // 9. Work Holidays
         await processType('WorkHoliday', affectedWorkHolidays, false);
 
-        // 10. Delete groups — post-order DFS (children first)
+        // 10. Routes
+        await processType('Route', affectedRoutes, false);
+
+        // 11. HOS Rule Sets
+        await processType('HOSRuleSet', affectedHOSRuleSets, false);
+
+        // 12. Delete groups — post-order DFS (children first)
         const map = new Map(groupsToDelete.map(function (g) { return [g.id, g]; }));
         const order = [];
         const visited = new Set();
@@ -407,17 +475,21 @@
             okCount++;
           } catch (e) {
             logLine('  ERR ' + (g.name || g.id) + ' — ' + (e.message || e), 'err');
-            failedGroups.push(g.name || g.id);
+            failedGroups.push({ id: g.id, name: g.name || g.id });
             failCount++;
           }
         }
 
-        if (failCount > 0) {
-          logLine('', 'info');
-          logLine('TIP: Groups that failed with "existing relations" are still referenced by', 'info');
-          logLine('an entity type this add-in does not handle (e.g. Routes, Notifications,', 'info');
-          logLine('HOSRuleSet, custom integrations). Open the group in MyGeotab Administration', 'info');
-          logLine('and manually inspect remaining references, then re-run this add-in.', 'info');
+        // Run diagnostic on failures
+        if (failedGroups.length > 0) {
+          logLine('');
+          logLine('Scanning all known entity types for remaining references...', 'info');
+          for (const fg of failedGroups) {
+            await diagnoseGroup(fg.id, fg.name);
+          }
+          logLine('');
+          logLine('Manually remove the references shown above in MyGeotab Administration,', 'info');
+          logLine('then re-run this add-in to delete the group.', 'info');
         }
 
         logLine('Done. Deleted: ' + okCount + ', Failed: ' + failCount, failCount ? 'err' : 'ok');
