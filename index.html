@@ -195,17 +195,37 @@
       $('cdg-result').classList.add('hidden');
       $('cdg-log-wrap').classList.remove('hidden');
       clearNode($('cdg-log'));
-      logLine('Fetching devices, users, rules, zones...');
+      logLine('Fetching entities that may reference groups...');
 
-      let devices, users, rules, zones;
+      // Safe Get — returns [] if the type is not supported in this database.
+      // (Different MyGeotab editions expose different entity types.)
+      async function safeGet(typeName) {
+        try { return await call('Get', { typeName: typeName }); }
+        catch (e) { logLine('  (' + typeName + ' skipped: ' + (e.message || e) + ')'); return []; }
+      }
+
+      let devices, users, rules, zones, trailers, customReports, distLists, mediaFiles, workHolidays;
       try {
         const results = await Promise.all([
           call('Get', { typeName: 'Device' }),
           call('Get', { typeName: 'User' }),
           call('Get', { typeName: 'Rule' }),
-          call('Get', { typeName: 'Zone' })
+          call('Get', { typeName: 'Zone' }),
+          safeGet('Trailer'),
+          safeGet('CustomReportSchedule'),
+          safeGet('DistributionList'),
+          safeGet('MediaFile'),
+          safeGet('WorkHoliday')
         ]);
-        devices = results[0]; users = results[1]; rules = results[2]; zones = results[3];
+        devices       = results[0];
+        users         = results[1];
+        rules         = results[2];
+        zones         = results[3];
+        trailers      = results[4];
+        customReports = results[5];
+        distLists     = results[6];
+        mediaFiles    = results[7];
+        workHolidays  = results[8];
       } catch (e) {
         logLine('Failed: ' + (e.message || e), 'err');
         return;
@@ -214,16 +234,25 @@
       const groupsToDelete = descendantsOf(id);
       const targetIds = new Set(groupsToDelete.map(function (g) { return g.id; }));
 
-      const affectedDevices = devices.filter(function (d) { return (d.groups || []).some(function (g) { return targetIds.has(g.id); }); });
+      const hasTargetGroup = function (entity) {
+        return (entity.groups || []).some(function (g) { return targetIds.has(g.id); });
+      };
+
+      const affectedDevices       = devices.filter(hasTargetGroup);
       // Users: check BOTH companyGroups and driverGroups — Geotab enforces
-      // driverGroups must be descendants of companyGroups, so we must update both together.
-      const affectedUsers   = users.filter(function (u) {
+      // driverGroups must be descendants of companyGroups, so we update both together.
+      const affectedUsers = users.filter(function (u) {
         const inCompany = (u.companyGroups || []).some(function (g) { return targetIds.has(g.id); });
         const inDriver  = (u.driverGroups  || []).some(function (g) { return targetIds.has(g.id); });
         return inCompany || inDriver;
       });
-      const affectedRules   = rules.filter(function (r) { return (r.groups || []).some(function (g) { return targetIds.has(g.id); }); });
-      const affectedZones   = zones.filter(function (z) { return (z.groups || []).some(function (g) { return targetIds.has(g.id); }); });
+      const affectedRules         = rules.filter(hasTargetGroup);
+      const affectedZones         = zones.filter(hasTargetGroup);
+      const affectedTrailers      = trailers.filter(hasTargetGroup);
+      const affectedCustomReports = customReports.filter(hasTargetGroup);
+      const affectedDistLists     = distLists.filter(hasTargetGroup);
+      const affectedMediaFiles    = mediaFiles.filter(hasTargetGroup);
+      const affectedWorkHolidays  = workHolidays.filter(hasTargetGroup);
 
       analysis = {
         groupsToDelete: groupsToDelete,
@@ -231,7 +260,12 @@
         affectedDevices: affectedDevices,
         affectedUsers: affectedUsers,
         affectedRules: affectedRules,
-        affectedZones: affectedZones
+        affectedZones: affectedZones,
+        affectedTrailers: affectedTrailers,
+        affectedCustomReports: affectedCustomReports,
+        affectedDistLists: affectedDistLists,
+        affectedMediaFiles: affectedMediaFiles,
+        affectedWorkHolidays: affectedWorkHolidays
       };
 
       renderImpact([
@@ -239,7 +273,12 @@
         { label: 'Devices to unassign',                count: affectedDevices.length },
         { label: 'Users to unassign',                  count: affectedUsers.length },
         { label: 'Rules to update',                    count: affectedRules.length },
-        { label: 'Zones to unassign',                  count: affectedZones.length }
+        { label: 'Zones to unassign',                  count: affectedZones.length },
+        { label: 'Trailers to unassign',               count: affectedTrailers.length },
+        { label: 'Custom Reports to update',           count: affectedCustomReports.length },
+        { label: 'Distribution Lists to update',       count: affectedDistLists.length },
+        { label: 'Media Files to update',              count: affectedMediaFiles.length },
+        { label: 'Work Holidays to update',            count: affectedWorkHolidays.length }
       ]);
 
       $('cdg-result').classList.remove('hidden');
@@ -266,67 +305,84 @@
 
       const groupsToDelete = analysis.groupsToDelete;
       const targetIds = analysis.targetIds;
-      const affectedDevices = analysis.affectedDevices;
-      const affectedUsers = analysis.affectedUsers;
-      const affectedRules = analysis.affectedRules;
-      const affectedZones = analysis.affectedZones;
+      const affectedDevices       = analysis.affectedDevices;
+      const affectedUsers         = analysis.affectedUsers;
+      const affectedRules         = analysis.affectedRules;
+      const affectedZones         = analysis.affectedZones;
+      const affectedTrailers      = analysis.affectedTrailers;
+      const affectedCustomReports = analysis.affectedCustomReports;
+      const affectedDistLists     = analysis.affectedDistLists;
+      const affectedMediaFiles    = analysis.affectedMediaFiles;
+      const affectedWorkHolidays  = analysis.affectedWorkHolidays;
 
-      try {
-        // 1. Devices — strip target groups, default to Company if empty
-        if (affectedDevices.length) {
-          logLine('Updating ' + affectedDevices.length + ' devices...');
-          const calls = affectedDevices.map(function (d) {
-            const ng = stripGroups(d.groups, targetIds);
-            if (!ng.length) ng.push({ id: COMPANY_ID });
-            return ['Set', { typeName: 'Device', entity: Object.assign({}, d, { groups: ng }) }];
+      // Generic helper: strip target groups from a list of entities' `groups` field.
+      // Each type runs in its own try/catch so one batch failure does not abort the whole flow.
+      async function processType(typeName, entities, mustHaveOne) {
+        if (!entities.length) return;
+        logLine('Updating ' + entities.length + ' ' + typeName.toLowerCase() + '(s)...');
+        try {
+          const calls = entities.map(function (e) {
+            const ng = stripGroups(e.groups, targetIds);
+            if (mustHaveOne && !ng.length) ng.push({ id: COMPANY_ID });
+            return ['Set', { typeName: typeName, entity: Object.assign({}, e, { groups: ng }) }];
           });
           await multi(calls);
-          logLine('  devices done', 'ok');
+          logLine('  ' + typeName.toLowerCase() + 's done', 'ok');
+        } catch (err) {
+          logLine('  ' + typeName + ' update failed: ' + (err.message || err), 'err');
+          logLine('  (continuing to next type)', 'info');
         }
+      }
+
+      try {
+        // 1. Devices — must have at least one group
+        await processType('Device', affectedDevices, true);
 
         // 2. Users — strip target groups from BOTH companyGroups and driverGroups
         // (Geotab requires driverGroups to be descendants of companyGroups; updating
         // only one would violate that constraint and the entire batch would fail.)
         if (affectedUsers.length) {
-          logLine('Updating ' + affectedUsers.length + ' users...');
-          const calls = affectedUsers.map(function (u) {
-            const newCompany = stripGroups(u.companyGroups, targetIds);
-            if (!newCompany.length) newCompany.push({ id: COMPANY_ID });
-            const updates = { companyGroups: newCompany };
-            // Drivers carry driverGroups; strip the same target IDs from there too.
-            if (u.driverGroups) {
-              updates.driverGroups = stripGroups(u.driverGroups, targetIds);
-            }
-            return ['Set', { typeName: 'User', entity: Object.assign({}, u, updates) }];
-          });
-          await multi(calls);
-          logLine('  users done', 'ok');
+          logLine('Updating ' + affectedUsers.length + ' user(s)...');
+          try {
+            const calls = affectedUsers.map(function (u) {
+              const newCompany = stripGroups(u.companyGroups, targetIds);
+              if (!newCompany.length) newCompany.push({ id: COMPANY_ID });
+              const updates = { companyGroups: newCompany };
+              if (u.driverGroups) {
+                updates.driverGroups = stripGroups(u.driverGroups, targetIds);
+              }
+              return ['Set', { typeName: 'User', entity: Object.assign({}, u, updates) }];
+            });
+            await multi(calls);
+            logLine('  users done', 'ok');
+          } catch (err) {
+            logLine('  User update failed: ' + (err.message || err), 'err');
+            logLine('  (continuing to next type)', 'info');
+          }
         }
 
         // 3. Rules — groups array can be empty (means applies to all)
-        if (affectedRules.length) {
-          logLine('Updating ' + affectedRules.length + ' rules...');
-          const calls = affectedRules.map(function (r) {
-            const ng = stripGroups(r.groups, targetIds);
-            return ['Set', { typeName: 'Rule', entity: Object.assign({}, r, { groups: ng }) }];
-          });
-          await multi(calls);
-          logLine('  rules done', 'ok');
-        }
+        await processType('Rule', affectedRules, false);
 
-        // 4. Zones
-        if (affectedZones.length) {
-          logLine('Updating ' + affectedZones.length + ' zones...');
-          const calls = affectedZones.map(function (z) {
-            const ng = stripGroups(z.groups, targetIds);
-            if (!ng.length) ng.push({ id: COMPANY_ID });
-            return ['Set', { typeName: 'Zone', entity: Object.assign({}, z, { groups: ng }) }];
-          });
-          await multi(calls);
-          logLine('  zones done', 'ok');
-        }
+        // 4. Zones — must have at least one group
+        await processType('Zone', affectedZones, true);
 
-        // 5. Delete groups — post-order DFS (children first)
+        // 5. Trailers — must have at least one group
+        await processType('Trailer', affectedTrailers, true);
+
+        // 6. Custom Report Schedules
+        await processType('CustomReportSchedule', affectedCustomReports, false);
+
+        // 7. Distribution Lists
+        await processType('DistributionList', affectedDistLists, false);
+
+        // 8. Media Files
+        await processType('MediaFile', affectedMediaFiles, false);
+
+        // 9. Work Holidays
+        await processType('WorkHoliday', affectedWorkHolidays, false);
+
+        // 10. Delete groups — post-order DFS (children first)
         const map = new Map(groupsToDelete.map(function (g) { return [g.id, g]; }));
         const order = [];
         const visited = new Set();
@@ -341,8 +397,9 @@
         // Pick up any disconnected nodes DFS missed
         for (const g of groupsToDelete) if (!visited.has(g.id)) order.push(g);
 
-        logLine('Deleting ' + order.length + ' groups (children first)...');
+        logLine('Deleting ' + order.length + ' group(s) (children first)...');
         let okCount = 0, failCount = 0;
+        const failedGroups = [];
         for (const g of order) {
           try {
             await call('Remove', { typeName: 'Group', entity: { id: g.id } });
@@ -350,8 +407,17 @@
             okCount++;
           } catch (e) {
             logLine('  ERR ' + (g.name || g.id) + ' — ' + (e.message || e), 'err');
+            failedGroups.push(g.name || g.id);
             failCount++;
           }
+        }
+
+        if (failCount > 0) {
+          logLine('', 'info');
+          logLine('TIP: Groups that failed with "existing relations" are still referenced by', 'info');
+          logLine('an entity type this add-in does not handle (e.g. Routes, Notifications,', 'info');
+          logLine('HOSRuleSet, custom integrations). Open the group in MyGeotab Administration', 'info');
+          logLine('and manually inspect remaining references, then re-run this add-in.', 'info');
         }
 
         logLine('Done. Deleted: ' + okCount + ', Failed: ' + failCount, failCount ? 'err' : 'ok');
