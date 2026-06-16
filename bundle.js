@@ -1,23 +1,21 @@
 /* ==========================================================================
- *  Dynasty Group Delete Solutions - v2.0
+ *  Dynasty Group Delete Solutions - v3.0 (Dynasty Safety Console "NOC" theme)
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
- *  Uses the existing styles.css classes (cdg-* + Zenith design tokens),
- *  so styles.css does NOT need to change.
+ *  - Functionality is identical to the working v2.x build: attempt Remove,
+ *    parse the GroupRelationViolatedException data payload (16 relation
+ *    categories), auto-clear everything the API can clear, loop until the
+ *    group deletes, and report unclearable marketplace add-ins with their
+ *    auto-enroll status + MyAdmin guidance.
+ *  - Front-end follows the Dynasty Safety Console design language: a
+ *    self-contained dark "NOC" theme with a light-mode toggle, Dynasty amber
+ *    branding, card panel, and a console-style execution log. All styling is
+ *    injected at runtime via injectStyles() (no external styles.css), so it
+ *    renders correctly inside MyGeotab's add-in iframe.
  *
- *  Approach:
- *   - Does NOT rely on scanning entity types. It attempts Remove and parses
- *     the GroupRelationViolatedException data payload (16 relation categories).
- *   - Auto-clears everything the API can clear (Device/User/Zone/Rule/Driver/
- *     eventRules/dvirLogs/defects/inspectionTemplates/maintenanceWorkJobs +
- *     groupFilters + customReportSchedules), then loops until the group deletes.
- *   - For signed / auto-enroll marketplace add-ins that cannot be changed via
- *     the API, it shows the exact add-in name and auto-enroll status with
- *     guidance to disable auto-enrollment in MyAdmin.
- *
- *  CSP rules: no innerHTML with HTML strings (createElement/textContent only),
- *  all variables in function scope (var), no onclick attributes
- *  (addEventListener), no literal newlines inside JS strings.
+ *  CSP rules: createElement / createElementNS / textContent only (no
+ *  innerHTML), classList + addEventListener (no onclick attributes), var only
+ *  (IIFE scope), no literal newlines inside JS strings.
  * ========================================================================== */
 geotab.addin.dynastyGroupDelete = function () {
   'use strict';
@@ -25,6 +23,8 @@ geotab.addin.dynastyGroupDelete = function () {
   var api = null;
   var creds = null;
   var elRoot = null;
+  var elApp = null;
+  var elThemeBtn = null;
   var elSelect = null;
   var elConfirm = null;
   var elDeleteBtn = null;
@@ -32,11 +32,9 @@ geotab.addin.dynastyGroupDelete = function () {
   var elLog = null;
   var busy = false;
 
-  // Built-in / system groups that cannot be deleted
   var SYSTEM_PREFIX = 'Group';
   var COMPANY_ID = 'GroupCompanyId';
 
-  // category -> [typeName, [fields]] that can be cleared via the API
   var CAT_MAP = {
     devices: ['Device', ['groups']],
     users: ['User', ['companyGroups']],
@@ -50,6 +48,82 @@ geotab.addin.dynastyGroupDelete = function () {
     maintenanceWorkJobs: ['MaintenanceEvent', ['groups']],
     customReportSchedules: ['CustomReportSchedule', ['scopeGroups', 'groups']]
   };
+
+  // ---------------------------- styling -----------------------------------
+  // Self-contained NOC theme. Each entry is a single line (no literal newlines
+  // inside strings); joined and injected once via createElement/textContent.
+  function injectStyles() {
+    if (document.getElementById('cdg-styles')) { return; }
+    var css = [
+      '.cdg-app{',
+      '  --bg:#0d1117; --panel:#161b22; --panel-2:#1c232c; --border:#2a323d;',
+      '  --text:#e6edf3; --muted:#8b98a5; --amber:#ffb454; --amber-strong:#f59e1b;',
+      '  --red:#ff5d5d; --red-strong:#e3534f; --blue:#5ab0ff; --green:#46af55;',
+      '  --log-bg:#080b10; --radius:10px;',
+      '  --font:"Segoe UI",Roboto,system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;',
+      '  --mono:"Roboto Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;',
+      '  box-sizing:border-box; min-height:100vh; background:var(--bg);',
+      '  color:var(--text); font-family:var(--font); padding:20px 24px 40px;',
+      '}',
+      '.cdg-app *{box-sizing:border-box}',
+      '.cdg-app.cdg-light{',
+      '  --bg:#f4f6f8; --panel:#ffffff; --panel-2:#eef2f6; --border:#d6dee6;',
+      '  --text:#1f2833; --muted:#4e677e; --log-bg:#0d1117;',
+      '}',
+      // header / brand
+      '.cdg-header{display:flex;align-items:center;gap:14px;margin-bottom:18px}',
+      '.cdg-shield{width:34px;height:34px;flex:0 0 auto}',
+      '.cdg-brandtext{display:flex;flex-direction:column;gap:2px;flex:1 1 auto;min-width:0}',
+      '.cdg-title{font-size:20px;font-weight:600;line-height:24px;margin:0;color:var(--text);letter-spacing:.2px}',
+      '.cdg-eyebrow{font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;color:var(--amber);margin:0}',
+      '.cdg-theme{flex:0 0 auto;border:1px solid var(--border);background:var(--panel-2);color:var(--muted);font-family:var(--font);font-size:12px;font-weight:500;padding:6px 12px;border-radius:999px;cursor:pointer;outline:none}',
+      '.cdg-theme:hover{color:var(--text);border-color:var(--amber)}',
+      // card
+      '.cdg-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px;max-width:760px;box-shadow:0 1px 0 rgba(0,0,0,.25)}',
+      '.cdg-intro{font-size:13px;line-height:20px;color:var(--muted);margin:0 0 16px}',
+      // row + field + actions
+      '.cdg-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}',
+      '.cdg-field{flex:1 1 320px;min-width:240px}',
+      '.cdg-label{display:block;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}',
+      '.cdg-select{width:100%;height:38px;padding:8px 12px;font-family:var(--font);font-size:13px;color:var(--text);background:var(--panel-2);border:1px solid var(--border);border-radius:8px;outline:none;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none}',
+      '.cdg-select:hover{border-color:var(--amber)}',
+      '.cdg-select:focus{border-color:var(--amber);box-shadow:0 0 0 2px rgba(255,180,84,.18)}',
+      '.cdg-actions{display:flex;gap:8px;flex-wrap:wrap}',
+      // buttons
+      '.cdg-btn{display:inline-flex;align-items:center;justify-content:center;height:38px;padding:0 16px;font-family:var(--font);font-size:13px;font-weight:600;color:var(--text);background:var(--panel-2);border:1px solid var(--border);border-radius:8px;cursor:pointer;outline:none}',
+      '.cdg-btn:hover{border-color:var(--amber);color:var(--amber)}',
+      '.cdg-btn:disabled,.cdg-btn[disabled]{opacity:.45;cursor:default;pointer-events:none}',
+      '.cdg-btn-danger{color:#fff;background:var(--red);border-color:var(--red)}',
+      '.cdg-btn-danger:hover{color:#fff;background:var(--red-strong);border-color:var(--red-strong)}',
+      // confirm
+      '.cdg-confirm{display:flex;gap:10px;align-items:flex-start;margin:16px 0 4px;padding:12px 14px;background:rgba(255,93,93,.08);border:1px solid rgba(255,93,93,.35);border-radius:8px}',
+      '.cdg-check{position:relative;flex:0 0 auto;width:18px;height:18px;margin-top:1px}',
+      '.cdg-check input{position:absolute;opacity:0;width:18px;height:18px;margin:0;cursor:pointer}',
+      '.cdg-box{width:18px;height:18px;border:1px solid var(--border);border-radius:4px;background:var(--panel-2);display:flex;align-items:center;justify-content:center}',
+      '.cdg-check input:checked + .cdg-box{background:var(--red);border-color:var(--red)}',
+      '.cdg-box svg{display:none;width:12px;height:12px}',
+      '.cdg-check input:checked + .cdg-box svg{display:block}',
+      '.cdg-check input:focus + .cdg-box{box-shadow:0 0 0 2px rgba(255,93,93,.3)}',
+      '.cdg-confirm-text{font-size:12px;line-height:18px;color:var(--text);cursor:pointer}',
+      '.cdg-confirm-text b{color:var(--red)}',
+      // log
+      '.cdg-logtitle{font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:18px 0 8px}',
+      '.cdg-log{background:var(--log-bg);border:1px solid var(--border);color:#cdd6e0;font-family:var(--mono);font-size:12px;line-height:1.7;padding:12px 14px;border-radius:8px;max-height:320px;overflow-y:auto}',
+      '.cdg-log-empty{color:#5b6673;font-style:italic}',
+      '.cdg-log-line{white-space:pre-wrap;word-break:break-word}',
+      '.cdg-log-ok{color:var(--green)}',
+      '.cdg-log-err{color:var(--red)}',
+      '.cdg-log-info{color:#8fb9e8}',
+      // footer
+      '.cdg-footer{max-width:760px;margin-top:14px;font-size:11px;color:var(--muted);text-align:right;letter-spacing:.3px}'
+    ].join('\n');
+
+    var style = document.createElement('style');
+    style.id = 'cdg-styles';
+    style.setAttribute('type', 'text/css');
+    style.appendChild(document.createTextNode(css));
+    (document.head || document.getElementsByTagName('head')[0] || document.documentElement).appendChild(style);
+  }
 
   // ----------------------------- helpers ---------------------------------
   function endpoint() {
@@ -98,11 +172,59 @@ geotab.addin.dynastyGroupDelete = function () {
   }
 
   // ------------------------------- UI -------------------------------------
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) { node.className = className; }
     if (text != null) { node.textContent = text; }
     return node;
+  }
+
+  function svgEl(name, attrs) {
+    var node = document.createElementNS(SVG_NS, name);
+    var k;
+    for (k in attrs) {
+      if (attrs.hasOwnProperty(k)) { node.setAttribute(k, attrs[k]); }
+    }
+    return node;
+  }
+
+  function shieldIcon() {
+    var svg = svgEl('svg', { 'class': 'cdg-shield', viewBox: '0 0 32 32' });
+    var shield = svgEl('path', {
+      d: 'M16 2 L28 6 V15 C28 22.5 22.8 27.6 16 30 C9.2 27.6 4 22.5 4 15 V6 Z',
+      fill: 'var(--amber)'
+    });
+    var inner = svgEl('path', {
+      d: 'M11 16 l3.4 3.4 L21 12.8',
+      fill: 'none', stroke: '#0d1117', 'stroke-width': '2.6',
+      'stroke-linecap': 'round', 'stroke-linejoin': 'round'
+    });
+    svg.appendChild(shield);
+    svg.appendChild(inner);
+    return svg;
+  }
+
+  function checkMark() {
+    var svg = svgEl('svg', { viewBox: '0 0 16 16' });
+    var path = svgEl('path', {
+      d: 'M6.5 11.5 L3 8 l1.4 -1.4 L6.5 8.7 l5.1 -5.1 L13 4 z',
+      fill: '#ffffff'
+    });
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function toggleTheme() {
+    if (!elApp) { return; }
+    if (elApp.classList.contains('cdg-light')) {
+      elApp.classList.remove('cdg-light');
+      elThemeBtn.textContent = 'Light';
+    } else {
+      elApp.classList.add('cdg-light');
+      elThemeBtn.textContent = 'Dark';
+    }
   }
 
   function setBusy(state) {
@@ -120,6 +242,8 @@ geotab.addin.dynastyGroupDelete = function () {
 
   function log(msg, kind) {
     if (!elLog) { return; }
+    var empty = elLog.querySelector('.cdg-log-empty');
+    if (empty) { elLog.removeChild(empty); }
     var line = el('div', 'cdg-log-line' + (kind ? ' cdg-log-' + kind : ''));
     line.textContent = '[' + new Date().toLocaleTimeString() + ']  ' + msg;
     elLog.appendChild(line);
@@ -131,75 +255,90 @@ geotab.addin.dynastyGroupDelete = function () {
     while (elLog.firstChild) { elLog.removeChild(elLog.firstChild); }
   }
 
+  function logPlaceholder() {
+    if (!elLog) { return; }
+    clearLog();
+    elLog.appendChild(el('div', 'cdg-log-empty', 'Waiting for action...'));
+  }
+
   function buildUI() {
     while (elRoot.firstChild) { elRoot.removeChild(elRoot.firstChild); }
 
-    var app = el('div', 'cdg-app');
-    var content = el('div', 'cdg-content');
+    elApp = el('div', 'cdg-app');
 
-    var title = el('h2', 'heading-01-desktop', 'Group Delete');
-    content.appendChild(title);
+    // header
+    var header = el('div', 'cdg-header');
+    header.appendChild(shieldIcon());
+    var brandText = el('div', 'cdg-brandtext');
+    brandText.appendChild(el('div', 'cdg-eyebrow', 'Dynasty Group Delete'));
+    brandText.appendChild(el('h1', 'cdg-title', 'Cascade Delete'));
+    header.appendChild(brandText);
+    elThemeBtn = el('button', 'cdg-theme', 'Light');
+    elThemeBtn.type = 'button';
+    elThemeBtn.addEventListener('click', toggleTheme);
+    header.appendChild(elThemeBtn);
+    elApp.appendChild(header);
 
-    var sub = el('p', 'body-01', 'Select a group to delete. References (devices, users, zones, rules, report filters) are cleared automatically. Marketplace add-ins that block deletion are listed for your provider to disable.');
-    sub.style.color = 'var(--text-secondary)';
-    content.appendChild(sub);
+    // card
+    var card = el('div', 'cdg-card');
+    card.appendChild(el('p', 'cdg-intro', 'Select a group to delete. Referencing entities (devices, users, zones, rules, report filters) are cleared automatically, then the group is removed. Marketplace add-ins that block deletion are listed for your provider to disable in MyAdmin.'));
 
-    // selector + actions row
     var row = el('div', 'cdg-row');
-
-    var selWrap = el('div', 'cdg-select-wrap');
-    var selLabel = el('div', 'zen-field-label__text', 'Group');
-    selLabel.style.marginBottom = '4px';
-    elSelect = el('select', 'zen-text-input');
-    elSelect.style.width = '100%';
+    var field = el('div', 'cdg-field');
+    field.appendChild(el('label', 'cdg-label', 'Group'));
+    elSelect = el('select', 'cdg-select');
     var ph = el('option', null, 'Loading groups...');
     ph.value = '';
     elSelect.appendChild(ph);
     elSelect.addEventListener('change', syncDeleteEnabled);
-    selWrap.appendChild(selLabel);
-    selWrap.appendChild(elSelect);
-    row.appendChild(selWrap);
+    field.appendChild(elSelect);
+    row.appendChild(field);
 
     var actions = el('div', 'cdg-actions');
-    elRefreshBtn = el('button', 'zen-button', 'Refresh');
+    elRefreshBtn = el('button', 'cdg-btn', 'Refresh');
     elRefreshBtn.type = 'button';
     elRefreshBtn.addEventListener('click', loadGroups);
-    elDeleteBtn = el('button', 'zen-button zen-button--destructive', 'Delete group');
+    elDeleteBtn = el('button', 'cdg-btn cdg-btn-danger', 'Delete group');
     elDeleteBtn.type = 'button';
     elDeleteBtn.disabled = true;
     elDeleteBtn.addEventListener('click', onDeleteClick);
     actions.appendChild(elRefreshBtn);
     actions.appendChild(elDeleteBtn);
     row.appendChild(actions);
+    card.appendChild(row);
 
-    content.appendChild(row);
-
-    // confirm group
-    var confirmGroup = el('div', 'cdg-confirm-group');
-    var confirmLabel = el('label', 'zen-checkbox__label');
-    confirmLabel.style.display = 'flex';
-    confirmLabel.style.alignItems = 'center';
-    confirmLabel.style.gap = '8px';
-    confirmLabel.style.cursor = 'pointer';
+    // confirm
+    var confirm = el('div', 'cdg-confirm');
+    var checkWrap = el('label', 'cdg-check');
     elConfirm = el('input');
     elConfirm.type = 'checkbox';
+    elConfirm.id = 'cdg-confirm-input';
     elConfirm.addEventListener('change', syncDeleteEnabled);
-    var confirmText = el('span', 'body-04', 'I understand this permanently deletes the selected group and removes it from all referencing entities.');
-    confirmLabel.appendChild(elConfirm);
-    confirmLabel.appendChild(confirmText);
-    confirmGroup.appendChild(confirmLabel);
-    content.appendChild(confirmGroup);
+    var box = el('span', 'cdg-box');
+    box.appendChild(checkMark());
+    checkWrap.appendChild(elConfirm);
+    checkWrap.appendChild(box);
+    var confirmLabel = el('label', 'cdg-confirm-text');
+    confirmLabel.setAttribute('for', 'cdg-confirm-input');
+    var warnBold = el('b', null, 'Cascade delete is irreversible.');
+    confirmLabel.appendChild(warnBold);
+    confirmLabel.appendChild(document.createTextNode(' This permanently deletes the selected group and removes it from all referencing entities.'));
+    confirm.appendChild(checkWrap);
+    confirm.appendChild(confirmLabel);
+    card.appendChild(confirm);
 
-    // execution log
-    var logTitle = el('div', 'heading-05', 'Execution log');
-    logTitle.style.marginTop = '8px';
-    content.appendChild(logTitle);
-
+    // log
+    card.appendChild(el('div', 'cdg-logtitle', 'Execution log'));
     elLog = el('div', 'cdg-log');
-    content.appendChild(elLog);
+    card.appendChild(elLog);
 
-    app.appendChild(content);
-    elRoot.appendChild(app);
+    elApp.appendChild(card);
+
+    // footer
+    elApp.appendChild(el('div', 'cdg-footer', 'Dynasty Communications'));
+
+    elRoot.appendChild(elApp);
+    logPlaceholder();
   }
 
   function loadGroups() {
@@ -270,7 +409,7 @@ geotab.addin.dynastyGroupDelete = function () {
   }
 
   function handleBlockers(gid, name, info, iter) {
-    var tasks = [];        // promises that clear references
+    var tasks = [];
     var addInBlockers = [];
     var manual = [];
     var k, cat;
@@ -300,7 +439,6 @@ geotab.addin.dynastyGroupDelete = function () {
     }
 
     if (tasks.length === 0) {
-      // Only add-ins / manual items remain - nothing left to clear via API
       reportUnclearable(addInBlockers, manual, name);
       setBusy(false);
       return;
@@ -315,7 +453,6 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // Remove the group from an entity's groups/companyGroups/driverGroups and Set
   function clearEntity(typeName, fields, id, gid) {
     return getEntities(typeName, { id: id }).then(function (rows) {
       var ent = rows && rows[0];
@@ -333,7 +470,6 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // Remove the group's condition from a GroupFilter (flatten to single group if one remains)
   function clearGroupFilters(items, gid) {
     return getEntities('CustomReportSchedule').then(function (crs) {
       var chain = Promise.resolve();
@@ -353,7 +489,6 @@ geotab.addin.dynastyGroupDelete = function () {
             }
             log('  cleared report group-filter ' + f.id, 'info');
             return rpc('Set', { typeName: 'GroupFilter', entity: gf }).catch(function () {
-              // fallback: re-scope the report schedule that uses this filter
               var rep = (crs || []).filter(function (r) {
                 return r.scopeGroupFilter && r.scopeGroupFilter.id === f.id;
               });
@@ -376,7 +511,6 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // Add-ins that cannot be cleared via the API - show name + auto-enroll status
   function reportUnclearable(addInBlockers, manual, name) {
     log('"' + name + '" could not be deleted - provider action required.', 'err');
     if (addInBlockers.length) {
@@ -413,21 +547,21 @@ geotab.addin.dynastyGroupDelete = function () {
   return {
     initialize: function (freshApi, freshState, initializeCallback) {
       api = freshApi;
+      injectStyles();
       elRoot = document.getElementById('cdg-root');
       buildUI();
-      // session credentials (for direct apiv1 calls so we can read error.data)
       try {
         api.getSession(function (session) {
           creds = (session && session.credentials) ? session.credentials : session;
           initializeCallback();
         });
       } catch (e) {
-        // in case getSession is promise based
         initializeCallback();
       }
     },
     focus: function (freshApi, freshState) {
       api = freshApi;
+      injectStyles();
       if (!creds) {
         try {
           api.getSession(function (session) {
