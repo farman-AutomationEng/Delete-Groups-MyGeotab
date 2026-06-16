@@ -1,20 +1,20 @@
 /* ==========================================================================
- *  Dynasty Group Delete Solutions — v2.0
+ *  Dynasty Group Delete Solutions - v2.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
- *  Aaj ki saari logic is mein hai:
- *   - Group delete ke liye "scan" par bharosa NAHI; Remove try karke
- *     GroupRelationViolatedException ka data parse karta hai (16 categories).
- *   - Jo API se clear ho sakta hai (Device/User/Zone/Rule/Driver/eventRules/
- *     dvirLogs/defects/inspectionTemplates/maintenanceWorkJobs + groupFilters +
- *     customReportSchedules) usay khud clear karta hai aur loop kar ke delete.
- *   - Jo signed/auto-enroll marketplace add-ins block karein (API se nahi
- *     hatte) unka EXACT naam + auto-enroll status dikhata hai:
- *     "MyAdmin se in ka auto-enroll off karein".
+ *  Approach:
+ *   - Does NOT rely on scanning entity types. It attempts Remove and parses
+ *     the GroupRelationViolatedException data payload (16 relation categories).
+ *   - Auto-clears everything the API can clear (Device/User/Zone/Rule/Driver/
+ *     eventRules/dvirLogs/defects/inspectionTemplates/maintenanceWorkJobs +
+ *     groupFilters + customReportSchedules), then loops until the group deletes.
+ *   - For signed / auto-enroll marketplace add-ins that cannot be changed via
+ *     the API, it shows the exact add-in name and auto-enroll status with
+ *     guidance to disable auto-enrollment in MyAdmin.
  *
- *  CSP rules: koi innerHTML-with-HTML nahi (createElement/textContent),
- *  saare variables function scope ke andar (var), onclick attribute nahi
- *  (addEventListener), JS strings mein literal newline nahi.
+ *  CSP rules: no innerHTML with HTML strings (createElement/textContent only),
+ *  all variables in function scope (var), no onclick attributes
+ *  (addEventListener), no literal newlines inside JS strings.
  * ========================================================================== */
 geotab.addin.dynastyGroupDelete = function () {
   'use strict';
@@ -29,11 +29,11 @@ geotab.addin.dynastyGroupDelete = function () {
   var elStatus = null;
   var busy = false;
 
-  // Built-in / system groups jo delete nahi hote
+  // Built-in / system groups that cannot be deleted
   var SYSTEM_PREFIX = 'Group';
   var COMPANY_ID = 'GroupCompanyId';
 
-  // category -> [typeName, [fields]] jo API se clear ho sakte hain
+  // category -> [typeName, [fields]] that can be cleared via the API
   var CAT_MAP = {
     devices: ['Device', ['groups']],
     users: ['User', ['companyGroups']],
@@ -210,7 +210,7 @@ geotab.addin.dynastyGroupDelete = function () {
 
   function onDeleteClick() {
     var gid = elSelect.value;
-    if (!gid) { setStatus('Pehle ek group select karein.', 'warn'); return; }
+    if (!gid) { setStatus('Please select a group first.', 'warn'); return; }
     var name = elSelect.options[elSelect.selectedIndex].textContent;
     clearLog();
     setBusy(true);
@@ -223,20 +223,20 @@ geotab.addin.dynastyGroupDelete = function () {
   function runDelete(gid, name, iter) {
     var MAX_ITERS = 8;
     if (iter > MAX_ITERS) {
-      setStatus('Stopped: zyada iterations. Baqi blockers manual handling maangte hain.', 'warn');
+      setStatus('Stopped: too many iterations. Remaining blockers need manual handling.', 'warn');
       setBusy(false);
       return;
     }
 
     rpc('Remove', { typeName: 'Group', entity: { id: gid } }).then(function () {
       log('Group deleted successfully.', 'ok');
-      setStatus('"' + name + '" delete ho gaya.', 'ok');
+      setStatus('"' + name + '" was deleted.', 'ok');
       setBusy(false);
       loadGroups();
     }).catch(function (err) {
       if (err.geotabName !== 'GroupRelationViolatedException' || !err.dataInfo) {
         log('Error: ' + err.message, 'err');
-        setStatus('Delete fail: ' + err.message, 'err');
+        setStatus('Delete failed: ' + err.message, 'err');
         setBusy(false);
         return;
       }
@@ -252,7 +252,7 @@ geotab.addin.dynastyGroupDelete = function () {
   }
 
   function handleBlockers(gid, name, info, iter) {
-    var tasks = [];        // promises jo clear karenge
+    var tasks = [];        // promises that clear references
     var addInBlockers = [];
     var manual = [];
     var k, cat;
@@ -282,7 +282,7 @@ geotab.addin.dynastyGroupDelete = function () {
     }
 
     if (tasks.length === 0) {
-      // Sirf add-ins / manual bache — clear karne ko kuch nahi
+      // Only add-ins / manual items remain - nothing left to clear via API
       reportUnclearable(addInBlockers, manual, name);
       setBusy(false);
       return;
@@ -297,7 +297,7 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // entity ke groups/companyGroups/driverGroups se group nikaal kar Set
+  // Remove the group from an entity's groups/companyGroups/driverGroups and Set
   function clearEntity(typeName, fields, id, gid) {
     return getEntities(typeName, { id: id }).then(function (rows) {
       var ent = rows && rows[0];
@@ -315,7 +315,7 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // GroupFilter se group ki condition nikaalna (1 bache to single-group flatten)
+  // Remove the group's condition from a GroupFilter (flatten to single group if one remains)
   function clearGroupFilters(items, gid) {
     return getEntities('CustomReportSchedule').then(function (crs) {
       var chain = Promise.resolve();
@@ -335,7 +335,7 @@ geotab.addin.dynastyGroupDelete = function () {
             }
             log('  cleared report group-filter ' + f.id);
             return rpc('Set', { typeName: 'GroupFilter', entity: gf }).catch(function () {
-              // fallback: us filter ko use karne wale report schedule ko re-scope
+              // fallback: re-scope the report schedule that uses this filter
               var rep = (crs || []).filter(function (r) {
                 return r.scopeGroupFilter && r.scopeGroupFilter.id === f.id;
               });
@@ -358,11 +358,11 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
-  // Add-ins jo API se clear nahi hote — naam + auto-enroll status dikhana
+  // Add-ins that cannot be cleared via the API - show name + auto-enroll status
   function reportUnclearable(addInBlockers, manual, name) {
-    setStatus('"' + name + '" delete nahi ho saka — provider action chahiye.', 'warn');
+    setStatus('"' + name + '" could not be deleted - provider action required.', 'warn');
     if (addInBlockers.length) {
-      log('Blocked by marketplace add-in(s). MyAdmin se in ka auto-enroll OFF karwayein (ya group scope se hatayein):', 'warn');
+      log('Blocked by marketplace add-in(s). Ask your provider to disable auto-enrollment in MyAdmin (or remove this group from their scope):', 'warn');
       var chain = Promise.resolve();
       addInBlockers.forEach(function (a) {
         chain = chain.then(function () {
@@ -374,16 +374,16 @@ geotab.addin.dynastyGroupDelete = function () {
               nm = (full.configuration && full.configuration.name) || a.id;
               auto = full.isAutoEnrollEnabled ? 'ON' : 'OFF';
             }
-            log('  • ' + nm + '   (auto-enroll: ' + auto + ',  id: ' + a.id + ')', 'warn');
+            log('  - ' + nm + '   (auto-enroll: ' + auto + ',  id: ' + a.id + ')', 'warn');
             return null;
           }).catch(function () {
-            log('  • Add-In ' + a.id, 'warn');
+            log('  - Add-In ' + a.id, 'warn');
             return null;
           });
         });
       });
       chain.then(function () {
-        log('Apne provider (Dynasty) se request karein, ya MyAdmin access ho to wahan se off karein, phir Refresh + dobara Delete.', 'info');
+        log('Once disabled in MyAdmin, click Refresh and Delete again.', 'info');
       });
     }
     if (manual.length) {
@@ -397,14 +397,14 @@ geotab.addin.dynastyGroupDelete = function () {
       api = freshApi;
       elRoot = document.getElementById('cdg-root');
       buildUI();
-      // session credentials (direct apiv1 calls ke liye, taake error.data mile)
+      // session credentials (for direct apiv1 calls so we can read error.data)
       try {
         api.getSession(function (session) {
           creds = (session && session.credentials) ? session.credentials : session;
           initializeCallback();
         });
       } catch (e) {
-        // agar getSession promise based ho
+        // in case getSession is promise based
         initializeCallback();
       }
     },
