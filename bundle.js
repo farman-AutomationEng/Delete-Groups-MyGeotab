@@ -2,6 +2,9 @@
  *  Dynasty Group Delete Solutions - v2.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
+ *  Uses the existing styles.css classes (cdg-* + Zenith design tokens),
+ *  so styles.css does NOT need to change.
+ *
  *  Approach:
  *   - Does NOT rely on scanning entity types. It attempts Remove and parses
  *     the GroupRelationViolatedException data payload (16 relation categories).
@@ -23,10 +26,10 @@ geotab.addin.dynastyGroupDelete = function () {
   var creds = null;
   var elRoot = null;
   var elSelect = null;
+  var elConfirm = null;
   var elDeleteBtn = null;
   var elRefreshBtn = null;
   var elLog = null;
-  var elStatus = null;
   var busy = false;
 
   // Built-in / system groups that cannot be deleted
@@ -95,31 +98,31 @@ geotab.addin.dynastyGroupDelete = function () {
   }
 
   // ------------------------------- UI -------------------------------------
-  function setBusy(state) {
-    busy = state;
-    if (elDeleteBtn) { elDeleteBtn.disabled = state; }
-    if (elSelect) { elSelect.disabled = state; }
-    if (elRefreshBtn) { elRefreshBtn.disabled = state; }
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) { node.className = className; }
+    if (text != null) { node.textContent = text; }
+    return node;
   }
 
-  function setStatus(text, kind) {
-    if (!elStatus) { return; }
-    elStatus.textContent = text || '';
-    elStatus.className = 'dgd-status' + (kind ? ' dgd-' + kind : '');
+  function setBusy(state) {
+    busy = state;
+    if (elSelect) { elSelect.disabled = state; }
+    if (elRefreshBtn) { elRefreshBtn.disabled = state; }
+    syncDeleteEnabled();
+  }
+
+  function syncDeleteEnabled() {
+    if (!elDeleteBtn) { return; }
+    var ok = !busy && elConfirm && elConfirm.checked && elSelect && elSelect.value;
+    elDeleteBtn.disabled = !ok;
   }
 
   function log(msg, kind) {
     if (!elLog) { return; }
-    var row = document.createElement('div');
-    row.className = 'dgd-logrow' + (kind ? ' dgd-' + kind : '');
-    var time = document.createElement('span');
-    time.className = 'dgd-logtime';
-    time.textContent = new Date().toLocaleTimeString();
-    var text = document.createElement('span');
-    text.textContent = msg;
-    row.appendChild(time);
-    row.appendChild(text);
-    elLog.appendChild(row);
+    var line = el('div', 'cdg-log-line' + (kind ? ' cdg-log-' + kind : ''));
+    line.textContent = '[' + new Date().toLocaleTimeString() + ']  ' + msg;
+    elLog.appendChild(line);
     elLog.scrollTop = elLog.scrollHeight;
   }
 
@@ -131,65 +134,81 @@ geotab.addin.dynastyGroupDelete = function () {
   function buildUI() {
     while (elRoot.firstChild) { elRoot.removeChild(elRoot.firstChild); }
 
-    var title = document.createElement('h2');
-    title.className = 'dgd-title';
-    title.textContent = 'Group Delete';
-    elRoot.appendChild(title);
+    var app = el('div', 'cdg-app');
+    var content = el('div', 'cdg-content');
 
-    var sub = document.createElement('p');
-    sub.className = 'dgd-sub';
-    sub.textContent = 'Select a group to delete. References (devices, users, zones, rules, report filters) are cleared automatically. Marketplace add-ins that block deletion are listed for your provider to disable.';
-    elRoot.appendChild(sub);
+    var title = el('h2', 'heading-01-desktop', 'Group Delete');
+    content.appendChild(title);
 
-    var bar = document.createElement('div');
-    bar.className = 'dgd-bar';
+    var sub = el('p', 'body-01', 'Select a group to delete. References (devices, users, zones, rules, report filters) are cleared automatically. Marketplace add-ins that block deletion are listed for your provider to disable.');
+    sub.style.color = 'var(--text-secondary)';
+    content.appendChild(sub);
 
-    elSelect = document.createElement('select');
-    elSelect.className = 'dgd-select';
-    var ph = document.createElement('option');
+    // selector + actions row
+    var row = el('div', 'cdg-row');
+
+    var selWrap = el('div', 'cdg-select-wrap');
+    var selLabel = el('div', 'zen-field-label__text', 'Group');
+    selLabel.style.marginBottom = '4px';
+    elSelect = el('select', 'zen-text-input');
+    elSelect.style.width = '100%';
+    var ph = el('option', null, 'Loading groups...');
     ph.value = '';
-    ph.textContent = 'Loading groups...';
     elSelect.appendChild(ph);
-    bar.appendChild(elSelect);
+    elSelect.addEventListener('change', syncDeleteEnabled);
+    selWrap.appendChild(selLabel);
+    selWrap.appendChild(elSelect);
+    row.appendChild(selWrap);
 
-    elDeleteBtn = document.createElement('button');
-    elDeleteBtn.className = 'dgd-btn dgd-btn-danger';
-    elDeleteBtn.type = 'button';
-    elDeleteBtn.textContent = 'Delete group';
-    elDeleteBtn.addEventListener('click', onDeleteClick);
-    bar.appendChild(elDeleteBtn);
-
-    elRefreshBtn = document.createElement('button');
-    elRefreshBtn.className = 'dgd-btn';
+    var actions = el('div', 'cdg-actions');
+    elRefreshBtn = el('button', 'zen-button', 'Refresh');
     elRefreshBtn.type = 'button';
-    elRefreshBtn.textContent = 'Refresh';
     elRefreshBtn.addEventListener('click', loadGroups);
-    bar.appendChild(elRefreshBtn);
+    elDeleteBtn = el('button', 'zen-button zen-button--destructive', 'Delete group');
+    elDeleteBtn.type = 'button';
+    elDeleteBtn.disabled = true;
+    elDeleteBtn.addEventListener('click', onDeleteClick);
+    actions.appendChild(elRefreshBtn);
+    actions.appendChild(elDeleteBtn);
+    row.appendChild(actions);
 
-    elRoot.appendChild(bar);
+    content.appendChild(row);
 
-    elStatus = document.createElement('div');
-    elStatus.className = 'dgd-status';
-    elRoot.appendChild(elStatus);
+    // confirm group
+    var confirmGroup = el('div', 'cdg-confirm-group');
+    var confirmLabel = el('label', 'zen-checkbox__label');
+    confirmLabel.style.display = 'flex';
+    confirmLabel.style.alignItems = 'center';
+    confirmLabel.style.gap = '8px';
+    confirmLabel.style.cursor = 'pointer';
+    elConfirm = el('input');
+    elConfirm.type = 'checkbox';
+    elConfirm.addEventListener('change', syncDeleteEnabled);
+    var confirmText = el('span', 'body-04', 'I understand this permanently deletes the selected group and removes it from all referencing entities.');
+    confirmLabel.appendChild(elConfirm);
+    confirmLabel.appendChild(confirmText);
+    confirmGroup.appendChild(confirmLabel);
+    content.appendChild(confirmGroup);
 
-    var logTitle = document.createElement('div');
-    logTitle.className = 'dgd-logtitle';
-    logTitle.textContent = 'Execution log';
-    elRoot.appendChild(logTitle);
+    // execution log
+    var logTitle = el('div', 'heading-05', 'Execution log');
+    logTitle.style.marginTop = '8px';
+    content.appendChild(logTitle);
 
-    elLog = document.createElement('div');
-    elLog.className = 'dgd-log';
-    elRoot.appendChild(elLog);
+    elLog = el('div', 'cdg-log');
+    content.appendChild(elLog);
+
+    app.appendChild(content);
+    elRoot.appendChild(app);
   }
 
   function loadGroups() {
     if (busy) { return; }
-    setStatus('Loading groups...', 'info');
+    log('Loading groups...', 'info');
     getEntities('Group').then(function (groups) {
       while (elSelect.firstChild) { elSelect.removeChild(elSelect.firstChild); }
-      var ph = document.createElement('option');
+      var ph = el('option', null, '-- Select a group --');
       ph.value = '';
-      ph.textContent = '-- Select a group --';
       elSelect.appendChild(ph);
 
       groups.filter(function (g) {
@@ -197,25 +216,25 @@ geotab.addin.dynastyGroupDelete = function () {
       }).sort(function (a, b) {
         return String(a.name || '').localeCompare(String(b.name || ''));
       }).forEach(function (g) {
-        var opt = document.createElement('option');
+        var opt = el('option', null, (g.name || g.id));
         opt.value = g.id;
-        opt.textContent = (g.name || g.id);
         elSelect.appendChild(opt);
       });
-      setStatus('Ready. ' + (elSelect.options.length - 1) + ' deletable groups.', 'ok');
+      log('Ready. ' + (elSelect.options.length - 1) + ' deletable groups loaded.', 'ok');
+      syncDeleteEnabled();
     }).catch(function (e) {
-      setStatus('Could not load groups: ' + e.message, 'err');
+      log('Could not load groups: ' + e.message, 'err');
     });
   }
 
   function onDeleteClick() {
     var gid = elSelect.value;
-    if (!gid) { setStatus('Please select a group first.', 'warn'); return; }
+    if (!gid) { log('Please select a group first.', 'err'); return; }
+    if (!elConfirm.checked) { log('Please confirm before deleting.', 'err'); return; }
     var name = elSelect.options[elSelect.selectedIndex].textContent;
     clearLog();
     setBusy(true);
-    setStatus('Deleting "' + name + '"...', 'info');
-    log('Starting delete for "' + name + '" (' + gid + ')');
+    log('Starting delete for "' + name + '" (' + gid + ')', 'info');
     runDelete(gid, name, 1);
   }
 
@@ -223,20 +242,19 @@ geotab.addin.dynastyGroupDelete = function () {
   function runDelete(gid, name, iter) {
     var MAX_ITERS = 8;
     if (iter > MAX_ITERS) {
-      setStatus('Stopped: too many iterations. Remaining blockers need manual handling.', 'warn');
+      log('Stopped: too many iterations. Remaining blockers need manual handling.', 'err');
       setBusy(false);
       return;
     }
 
     rpc('Remove', { typeName: 'Group', entity: { id: gid } }).then(function () {
-      log('Group deleted successfully.', 'ok');
-      setStatus('"' + name + '" was deleted.', 'ok');
+      log('"' + name + '" was deleted successfully.', 'ok');
+      if (elConfirm) { elConfirm.checked = false; }
       setBusy(false);
       loadGroups();
     }).catch(function (err) {
       if (err.geotabName !== 'GroupRelationViolatedException' || !err.dataInfo) {
-        log('Error: ' + err.message, 'err');
-        setStatus('Delete failed: ' + err.message, 'err');
+        log('Delete failed: ' + err.message, 'err');
         setBusy(false);
         return;
       }
@@ -276,7 +294,7 @@ geotab.addin.dynastyGroupDelete = function () {
     }
 
     if (tasks.length === 0 && addInBlockers.length === 0 && manual.length === 0) {
-      log('No clearable references found but delete still blocked.', 'warn');
+      log('No clearable references found but delete still blocked.', 'err');
       setBusy(false);
       return;
     }
@@ -288,7 +306,7 @@ geotab.addin.dynastyGroupDelete = function () {
       return;
     }
 
-    log('Iteration ' + iter + ': clearing ' + tasks.length + ' reference(s)...');
+    log('Iteration ' + iter + ': clearing ' + tasks.length + ' reference(s)...', 'info');
     Promise.all(tasks).then(function () {
       runDelete(gid, name, iter + 1);
     }).catch(function (e) {
@@ -310,7 +328,7 @@ geotab.addin.dynastyGroupDelete = function () {
         }
       });
       if (!changed) { return null; }
-      log('  cleared ' + typeName + ' "' + (ent.name || id) + '"');
+      log('  cleared ' + typeName + ' "' + (ent.name || id) + '"', 'info');
       return rpc('Set', { typeName: typeName, entity: ent });
     });
   }
@@ -333,7 +351,7 @@ geotab.addin.dynastyGroupDelete = function () {
             } else {
               gf.groupFilterCondition = null;
             }
-            log('  cleared report group-filter ' + f.id);
+            log('  cleared report group-filter ' + f.id, 'info');
             return rpc('Set', { typeName: 'GroupFilter', entity: gf }).catch(function () {
               // fallback: re-scope the report schedule that uses this filter
               var rep = (crs || []).filter(function (r) {
@@ -360,9 +378,9 @@ geotab.addin.dynastyGroupDelete = function () {
 
   // Add-ins that cannot be cleared via the API - show name + auto-enroll status
   function reportUnclearable(addInBlockers, manual, name) {
-    setStatus('"' + name + '" could not be deleted - provider action required.', 'warn');
+    log('"' + name + '" could not be deleted - provider action required.', 'err');
     if (addInBlockers.length) {
-      log('Blocked by marketplace add-in(s). Ask your provider to disable auto-enrollment in MyAdmin (or remove this group from their scope):', 'warn');
+      log('Blocked by marketplace add-in(s). Ask your provider to disable auto-enrollment in MyAdmin (or remove this group from their scope):', 'err');
       var chain = Promise.resolve();
       addInBlockers.forEach(function (a) {
         chain = chain.then(function () {
@@ -374,20 +392,20 @@ geotab.addin.dynastyGroupDelete = function () {
               nm = (full.configuration && full.configuration.name) || a.id;
               auto = full.isAutoEnrollEnabled ? 'ON' : 'OFF';
             }
-            log('  - ' + nm + '   (auto-enroll: ' + auto + ',  id: ' + a.id + ')', 'warn');
+            log('  - ' + nm + '   (auto-enroll: ' + auto + ',  id: ' + a.id + ')', 'err');
             return null;
           }).catch(function () {
-            log('  - Add-In ' + a.id, 'warn');
+            log('  - Add-In ' + a.id, 'err');
             return null;
           });
         });
       });
       chain.then(function () {
-        log('Once disabled in MyAdmin, click Refresh and Delete again.', 'info');
+        log('Once disabled in MyAdmin, click Refresh and try Delete again.', 'info');
       });
     }
     if (manual.length) {
-      log('Other blockers needing manual review: ' + manual.join(', '), 'warn');
+      log('Other blockers needing manual review: ' + manual.join(', '), 'err');
     }
   }
 
