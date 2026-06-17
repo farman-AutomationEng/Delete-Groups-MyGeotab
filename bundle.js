@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  Dynasty Groups Delete Solution - v4.0
+ *  Dynasty Group Delete Solutions - v4.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
  *  NEW in v4.0 (UX restored from the original app):
@@ -642,11 +642,30 @@ geotab.addin.dynastyGroupDelete = function () {
     }
 
     log('Iteration ' + iter + ': clearing ' + tasks.length + ' reference(s)...', 'info');
-    Promise.all(tasks).then(function () {
-      runDelete(gid, name, iter + 1);
+    var wrapped = tasks.map(function (t) {
+      return t.then(function (r) {
+        return r === false ? false : (r ? true : null);
+      }).catch(function (e) {
+        log('  ' + (e && e.message ? e.message : 'clear failed'), 'err');
+        return false;
+      });
+    });
+    Promise.all(wrapped).then(function (results) {
+      if (results.indexOf(true) >= 0) {
+        runDelete(gid, name, iter + 1);
+      } else {
+        log('Could not auto-clear the remaining reference(s). Please reassign the affected user(s)/entity(ies) to another group in MyGeotab (Administration > Users), then run Delete again, or contact Dynasty support.', 'err');
+        setBusy(false);
+      }
+    });
+  }
+
+  function setEntity(typeName, ent, label) {
+    return rpc('Set', { typeName: typeName, entity: ent }).then(function () {
+      return true;
     }).catch(function (e) {
-      log('Clear step error: ' + e.message, 'err');
-      setBusy(false);
+      log('  ' + typeName + ' "' + label + '": ' + e.message, 'err');
+      return false;
     });
   }
 
@@ -654,6 +673,8 @@ geotab.addin.dynastyGroupDelete = function () {
     return getEntities(typeName, { id: id }).then(function (rows) {
       var ent = rows && rows[0];
       if (!ent) { return null; }
+      var label = ent.name || id;
+      var newVals = {};
       var changed = false;
       var companyChanged = false;
       fields.forEach(function (f) {
@@ -661,33 +682,34 @@ geotab.addin.dynastyGroupDelete = function () {
           var filtered = ent[f].filter(function (g) { return g.id !== gid; });
           if (filtered.length === 0 && NON_EMPTY_FIELDS[f]) {
             filtered = [{ id: COMPANY_ID }];
-            log('  ' + typeName + ' "' + (ent.name || id) + '": ' + f + ' would be empty - reassigned to Company group', 'info');
+            log('  ' + typeName + ' "' + label + '": ' + f + ' would be empty - reassigned to Company group', 'info');
           }
-          ent[f] = filtered;
+          newVals[f] = filtered;
           changed = true;
           if (f === 'companyGroups') { companyChanged = true; }
         }
       });
-      // Advanced data access: a User's accessGroupFilter must stay consistent
-      // with companyGroups ("CompanyGroups must be visible to AccessGroupFilter").
-      // Setting it null is unreliable, so re-sync the filter to the new
-      // companyGroups - then companyGroups is fully visible to the filter.
-      if (typeName === 'User' && companyChanged && ent.accessGroupFilter && Array.isArray(ent.companyGroups)) {
-        ent.accessGroupFilter = {
-          relation: 'Or',
-          groupFilterConditions: ent.companyGroups.map(function (g) {
-            return { groupId: g.id, isNegated: false };
-          })
-        };
-        log('  User "' + (ent.name || id) + '": re-synced data-access filter to its groups', 'info');
-        changed = true;
-      }
       if (!changed) { return null; }
-      log('  cleared ' + typeName + ' "' + (ent.name || id) + '"', 'info');
-      return rpc('Set', { typeName: typeName, entity: ent }).catch(function (e) {
-        e.message = typeName + ' "' + (ent.name || id) + '": ' + e.message;
-        throw e;
-      });
+
+      function applyGroups() {
+        var k;
+        for (k in newVals) { if (newVals.hasOwnProperty(k)) { ent[k] = newVals[k]; } }
+        log('  cleared ' + typeName + ' "' + label + '"', 'info');
+        return setEntity(typeName, ent, label);
+      }
+
+      // A User with an advanced data-access filter (accessGroupFilter) tied to
+      // this group blocks the companyGroups change. Clear the filter in its own
+      // Set first (groups unchanged, still valid), then change the groups.
+      if (typeName === 'User' && companyChanged && ent.accessGroupFilter) {
+        ent.accessGroupFilter = null;
+        log('  User "' + label + '": clearing advanced data-access filter', 'info');
+        return setEntity('User', ent, label).then(function (ok) {
+          if (!ok) { return false; }
+          return applyGroups();
+        });
+      }
+      return applyGroups();
     });
   }
 
