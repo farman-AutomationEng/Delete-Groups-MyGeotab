@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  Dynasty Groups Delete Solutions - v4.0
+ *  Dynasty Group Delete Solutions - v4.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
  *  NEW in v4.0 (UX restored from the original app):
@@ -44,6 +44,7 @@ geotab.addin.dynastyGroupDelete = function () {
   var MAX_NAMES = 6;
   var SYSTEM_PREFIX = 'Group';
   var COMPANY_ID = 'GroupCompanyId';
+  var fallbackGroupId = COMPANY_ID;
 
   var CAT_MAP = {
     devices: ['Device', ['groups']],
@@ -212,6 +213,24 @@ geotab.addin.dynastyGroupDelete = function () {
       if (e && hasGroup(e.groups, gid)) { out.push(e); }
     });
     return out;
+  }
+
+  // Find the parent group of gid (the group whose children include gid).
+  // Used as the fallback scope for users left with no group, so a user scoped
+  // only to the deleted group moves UP one level - not to organization-wide.
+  function resolveParent(gid) {
+    return getEntities('Group').then(function (groups) {
+      var i, j, g;
+      for (i = 0; i < groups.length; i++) {
+        g = groups[i];
+        if (g && g.children) {
+          for (j = 0; j < g.children.length; j++) {
+            if (g.children[j] && g.children[j].id === gid) { return g.id; }
+          }
+        }
+      }
+      return COMPANY_ID;
+    }).catch(function () { return COMPANY_ID; });
   }
 
   function entName(e) {
@@ -565,7 +584,15 @@ geotab.addin.dynastyGroupDelete = function () {
     clearLog();
     setBusy(true);
     log('Starting delete for "' + name + '" (' + gid + ')', 'info');
-    runDelete(gid, name, 1);
+    resolveParent(gid).then(function (parentId) {
+      fallbackGroupId = parentId;
+      if (parentId === COMPANY_ID) {
+        log('Note: this is a top-level group. Any user scoped only to it will be moved to the Company Group (organization-wide access) - reassign them afterward if narrower access is needed.', 'info');
+      } else {
+        log('Any user scoped only to this group will be moved up to its parent group (not full access).', 'info');
+      }
+      runDelete(gid, name, 1);
+    });
   }
 
   // ----------------------- core delete (loop) -----------------------------
@@ -687,17 +714,36 @@ geotab.addin.dynastyGroupDelete = function () {
       if (!ent) { return null; }
       var label = ent.name || id;
       var changed = false;
+      var companyChanged = false;
       fields.forEach(function (f) {
         if (Array.isArray(ent[f]) && hasGroup(ent[f], gid)) {
           var filtered = ent[f].filter(function (g) { return g.id !== gid; });
           if (filtered.length === 0 && NON_EMPTY_FIELDS[f]) {
-            filtered = [{ id: COMPANY_ID }];
-            log('  ' + typeName + ' "' + label + '": ' + f + ' would be empty - reassigned to Company group', 'info');
+            filtered = [{ id: fallbackGroupId }];
+            log('  ' + typeName + ' "' + label + '": ' + f + ' would be empty - moved to parent group', 'info');
           }
           ent[f] = filtered;
           changed = true;
+          if (f === 'companyGroups') { companyChanged = true; }
         }
       });
+      // A User's advanced "Data access" filter (accessGroupFilter) must stay
+      // consistent with companyGroups, or Geotab rejects with "CompanyGroups
+      // must be visible to AccessGroupFilter". Mirror the filter's group list to
+      // the new companyGroups, preserving the original object/condition shape.
+      if (typeName === 'User' && companyChanged && ent.accessGroupFilter &&
+        Array.isArray(ent.accessGroupFilter.groupFilterConditions) &&
+        Array.isArray(ent.companyGroups)) {
+        var template = ent.accessGroupFilter.groupFilterConditions[0] || {};
+        ent.accessGroupFilter.groupFilterConditions = ent.companyGroups.map(function (g) {
+          var cond = {};
+          var k;
+          for (k in template) { if (template.hasOwnProperty(k)) { cond[k] = template[k]; } }
+          cond.groupId = g.id;
+          return cond;
+        });
+        log('  User "' + label + '": synced data-access filter to its groups', 'info');
+      }
       if (!changed) { return null; }
       log('  cleared ' + typeName + ' "' + label + '"', 'info');
       return setEntity(typeName, ent, label);
@@ -731,7 +777,7 @@ geotab.addin.dynastyGroupDelete = function () {
                 c2 = c2.then(function () {
                   r.scopeGroupFilter = null;
                   if (!r.scopeGroups || !r.scopeGroups.length) {
-                    r.scopeGroups = [{ id: COMPANY_ID }];
+                    r.scopeGroups = [{ id: fallbackGroupId }];
                   }
                   return rpc('Set', { typeName: 'CustomReportSchedule', entity: r });
                 });
