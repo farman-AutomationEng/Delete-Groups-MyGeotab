@@ -655,6 +655,7 @@ geotab.addin.dynastyGroupDelete = function () {
       var ent = rows && rows[0];
       if (!ent) { return null; }
       var changed = false;
+      var companyChanged = false;
       fields.forEach(function (f) {
         if (Array.isArray(ent[f]) && hasGroup(ent[f], gid)) {
           var filtered = ent[f].filter(function (g) { return g.id !== gid; });
@@ -664,8 +665,17 @@ geotab.addin.dynastyGroupDelete = function () {
           }
           ent[f] = filtered;
           changed = true;
+          if (f === 'companyGroups') { companyChanged = true; }
         }
       });
+      // Advanced data access: a User's accessGroupFilter tied to the removed
+      // group conflicts with companyGroups ("CompanyGroups must be visible to
+      // AccessGroupFilter"), so clear it - data access then follows companyGroups.
+      if (typeName === 'User' && companyChanged && ent.accessGroupFilter) {
+        ent.accessGroupFilter = null;
+        log('  User "' + (ent.name || id) + '": cleared advanced data-access filter (now uses data scope)', 'info');
+        changed = true;
+      }
       if (!changed) { return null; }
       log('  cleared ' + typeName + ' "' + (ent.name || id) + '"', 'info');
       return rpc('Set', { typeName: typeName, entity: ent });
