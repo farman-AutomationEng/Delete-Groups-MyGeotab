@@ -491,12 +491,19 @@ geotab.addin.dynastyGroupDelete = function () {
 
       var members = [];
       var drivers = [];
+      var advanced = [];
       (res[4] || []).forEach(function (u) {
-        if (hasGroup(u.companyGroups, gid)) { members.push(entName(u)); }
+        var inCompany = hasGroup(u.companyGroups, gid);
+        if (inCompany && u.accessGroupFilter) {
+          advanced.push(entName(u));
+        } else if (inCompany) {
+          members.push(entName(u));
+        }
         if (hasGroup(u.driverGroups, gid)) { drivers.push(entName(u)); }
       });
       if (members.length) { cats.push({ label: 'Users (data access)', names: members }); }
       if (drivers.length) { cats.push({ label: 'Drivers', names: drivers }); }
+      if (advanced.length) { cats.push({ label: 'Users - advanced data access (reassign manually first)', names: advanced, warn: true }); }
 
       var addins = [];
       (res[5] || []).forEach(function (a) {
@@ -664,7 +671,12 @@ geotab.addin.dynastyGroupDelete = function () {
     return rpc('Set', { typeName: typeName, entity: ent }).then(function () {
       return true;
     }).catch(function (e) {
-      log('  ' + typeName + ' "' + label + '": ' + e.message, 'err');
+      var msg = e.message || 'Set failed';
+      if (typeName === 'User' && /AccessGroupFilter/i.test(msg)) {
+        log('  ACTION NEEDED - User "' + label + '" has Advanced Data Access locked to this group (cannot be changed via API). Fix it in Administration > Users > ' + label + ' > Data Access: switch to "Entire Organization" or another group, Save, then run Delete again.', 'err');
+      } else {
+        log('  ' + typeName + ' "' + label + '": ' + msg, 'err');
+      }
       return false;
     });
   }
@@ -674,9 +686,7 @@ geotab.addin.dynastyGroupDelete = function () {
       var ent = rows && rows[0];
       if (!ent) { return null; }
       var label = ent.name || id;
-      var newVals = {};
       var changed = false;
-      var companyChanged = false;
       fields.forEach(function (f) {
         if (Array.isArray(ent[f]) && hasGroup(ent[f], gid)) {
           var filtered = ent[f].filter(function (g) { return g.id !== gid; });
@@ -684,32 +694,13 @@ geotab.addin.dynastyGroupDelete = function () {
             filtered = [{ id: COMPANY_ID }];
             log('  ' + typeName + ' "' + label + '": ' + f + ' would be empty - reassigned to Company group', 'info');
           }
-          newVals[f] = filtered;
+          ent[f] = filtered;
           changed = true;
-          if (f === 'companyGroups') { companyChanged = true; }
         }
       });
       if (!changed) { return null; }
-
-      function applyGroups() {
-        var k;
-        for (k in newVals) { if (newVals.hasOwnProperty(k)) { ent[k] = newVals[k]; } }
-        log('  cleared ' + typeName + ' "' + label + '"', 'info');
-        return setEntity(typeName, ent, label);
-      }
-
-      // A User with an advanced data-access filter (accessGroupFilter) tied to
-      // this group blocks the companyGroups change. Clear the filter in its own
-      // Set first (groups unchanged, still valid), then change the groups.
-      if (typeName === 'User' && companyChanged && ent.accessGroupFilter) {
-        ent.accessGroupFilter = null;
-        log('  User "' + label + '": clearing advanced data-access filter', 'info');
-        return setEntity('User', ent, label).then(function (ok) {
-          if (!ok) { return false; }
-          return applyGroups();
-        });
-      }
-      return applyGroups();
+      log('  cleared ' + typeName + ' "' + label + '"', 'info');
+      return setEntity(typeName, ent, label);
     });
   }
 
