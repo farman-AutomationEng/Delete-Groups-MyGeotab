@@ -135,6 +135,9 @@ geotab.addin.dynastyGroupDelete = function () {
       '.cdg-log-ok{color:var(--green)}',
       '.cdg-log-err{color:var(--red)}',
       '.cdg-log-info{color:#8fb9e8}',
+      '.cdg-disclaimer{margin-top:16px;font-size:12px;line-height:1.5;color:var(--muted);background:rgba(143,185,232,.08);border:1px solid rgba(143,185,232,.3);border-radius:8px;padding:10px 12px}',
+      '.cdg-disclaimer a{color:var(--blue);text-decoration:none}',
+      '.cdg-disclaimer a:hover{text-decoration:underline}',
       '.cdg-footer{max-width:760px;margin-top:14px;font-size:11px;color:var(--muted);text-align:right;letter-spacing:.3px}'
     ].join('\n');
 
@@ -340,8 +343,8 @@ geotab.addin.dynastyGroupDelete = function () {
     var header = el('div', 'cdg-header');
     header.appendChild(shieldIcon());
     var brandText = el('div', 'cdg-brandtext');
-    brandText.appendChild(el('div', 'cdg-eyebrow', 'Dynasty Group Delete'));
-    brandText.appendChild(el('h1', 'cdg-title', 'Cascade Delete'));
+    brandText.appendChild(el('div', 'cdg-eyebrow', 'Dynasty Communications'));
+    brandText.appendChild(el('h1', 'cdg-title', 'Dynasty Group Deletion'));
     header.appendChild(brandText);
     elThemeBtn = el('button', 'cdg-theme', 'Light');
     elThemeBtn.type = 'button';
@@ -402,6 +405,14 @@ geotab.addin.dynastyGroupDelete = function () {
     card.appendChild(el('div', 'cdg-logtitle', 'Execution log'));
     elLog = el('div', 'cdg-log');
     card.appendChild(elLog);
+
+    var disc = el('div', 'cdg-disclaimer');
+    disc.appendChild(document.createTextNode('Note: If the groups are not deleting, please contact Dynasty support at '));
+    var mail = el('a', null, 'support@dynastync.com');
+    mail.setAttribute('href', 'mailto:support@dynastync.com');
+    disc.appendChild(mail);
+    disc.appendChild(document.createTextNode('.'));
+    card.appendChild(disc);
 
     elApp.appendChild(card);
     elApp.appendChild(el('div', 'cdg-footer', 'Dynasty Communications'));
