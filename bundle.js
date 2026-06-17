@@ -59,6 +59,10 @@ geotab.addin.dynastyGroupDelete = function () {
     customReportSchedules: ['CustomReportSchedule', ['scopeGroups', 'groups']]
   };
 
+  // Fields Geotab requires to be non-empty. If removing the group would leave
+  // one empty, fall back to the Company group so the Set is accepted.
+  var NON_EMPTY_FIELDS = { companyGroups: true };
+
   // ---------------------------- styling -----------------------------------
   function injectStyles() {
     if (document.getElementById('cdg-styles')) { return; }
@@ -592,7 +596,8 @@ geotab.addin.dynastyGroupDelete = function () {
     var tasks = [];
     var addInBlockers = [];
     var manual = [];
-    var k, cat;
+    var entMap = {};
+    var k, cat, mapKey;
 
     for (k in info) {
       if (!info.hasOwnProperty(k) || k === 'group') { continue; }
@@ -604,11 +609,23 @@ geotab.addin.dynastyGroupDelete = function () {
       } else if (k === 'groupFilters') {
         tasks.push(clearGroupFilters(cat, gid));
       } else if (CAT_MAP[k]) {
-        cat.forEach(function (item) {
-          tasks.push(clearEntity(CAT_MAP[k][0], CAT_MAP[k][1], item.id, gid));
-        });
+        (function (typeName, fields) {
+          cat.forEach(function (item) {
+            var key = typeName + '|' + item.id;
+            if (!entMap[key]) { entMap[key] = { typeName: typeName, id: item.id, fields: [] }; }
+            fields.forEach(function (f) {
+              if (entMap[key].fields.indexOf(f) < 0) { entMap[key].fields.push(f); }
+            });
+          });
+        })(CAT_MAP[k][0], CAT_MAP[k][1]);
       } else {
         manual.push(k + ' (' + cat.length + ')');
+      }
+    }
+
+    for (mapKey in entMap) {
+      if (entMap.hasOwnProperty(mapKey)) {
+        tasks.push(clearEntity(entMap[mapKey].typeName, entMap[mapKey].fields, entMap[mapKey].id, gid));
       }
     }
 
@@ -640,7 +657,12 @@ geotab.addin.dynastyGroupDelete = function () {
       var changed = false;
       fields.forEach(function (f) {
         if (Array.isArray(ent[f]) && hasGroup(ent[f], gid)) {
-          ent[f] = ent[f].filter(function (g) { return g.id !== gid; });
+          var filtered = ent[f].filter(function (g) { return g.id !== gid; });
+          if (filtered.length === 0 && NON_EMPTY_FIELDS[f]) {
+            filtered = [{ id: COMPANY_ID }];
+            log('  ' + typeName + ' "' + (ent.name || id) + '": ' + f + ' would be empty - reassigned to Company group', 'info');
+          }
+          ent[f] = filtered;
           changed = true;
         }
       });
