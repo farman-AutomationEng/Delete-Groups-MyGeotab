@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  Dynasty Group Delete Solutions - v4.2
+ *  Dynasty Group Delete Solutions - v4.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
  *  NEW in v4.0 (UX restored from the original app):
@@ -513,7 +513,7 @@ geotab.addin.dynastyGroupDelete = function () {
       var advanced = [];
       (res[4] || []).forEach(function (u) {
         var inCompany = hasGroup(u.companyGroups, gid);
-        if (inCompany && u.accessGroupFilter) {
+        if (inCompany && filterRefsGroup(u.accessGroupFilter, gid)) {
           advanced.push(entName(u));
         } else if (inCompany) {
           members.push(entName(u));
@@ -522,7 +522,7 @@ geotab.addin.dynastyGroupDelete = function () {
       });
       if (members.length) { cats.push({ label: 'Users (data access)', names: members }); }
       if (drivers.length) { cats.push({ label: 'Drivers', names: drivers }); }
-      if (advanced.length) { cats.push({ label: 'Users - advanced data access (reassign manually first)', names: advanced, warn: true }); }
+      if (advanced.length) { cats.push({ label: 'Users assigned only to this group', names: advanced, warn: true, note: 'assign these users another group first' }); }
 
       var addins = [];
       (res[5] || []).forEach(function (a) {
@@ -531,7 +531,7 @@ geotab.addin.dynastyGroupDelete = function () {
           addins.push(nm + '  (auto-enroll: ' + (a.isAutoEnrollEnabled ? 'ON' : 'OFF') + ')');
         }
       });
-      if (addins.length) { cats.push({ label: 'Marketplace add-ins', names: addins, warn: true }); }
+      if (addins.length) { cats.push({ label: 'Marketplace add-ins', names: addins, warn: true, note: 'cleared in MyAdmin if it blocks delete' }); }
 
       renderRefs(cats);
     });
@@ -560,7 +560,7 @@ geotab.addin.dynastyGroupDelete = function () {
         var head = el('div', 'cdg-ref-head');
         head.appendChild(el('span', 'cdg-ref-label', c.label));
         head.appendChild(el('span', 'cdg-ref-count', String(c.names.length)));
-        if (c.warn) { head.appendChild(el('span', 'cdg-ref-note', 'cleared in MyAdmin if it blocks delete')); }
+        if (c.note) { head.appendChild(el('span', 'cdg-ref-note', c.note)); }
         body.appendChild(head);
         body.appendChild(el('div', 'cdg-ref-names', namesLine(c.names)));
         cat.appendChild(body);
@@ -675,7 +675,7 @@ geotab.addin.dynastyGroupDelete = function () {
       return;
     }
 
-    log('Iteration ' + iter + ': clearing ' + tasks.length + ' reference(s)...', 'info');
+    log('Iteration ' + iter + ': clearing ' + tasks.length + ' linked item(s)...', 'info');
     var wrapped = tasks.map(function (t) {
       return t.then(function (r) {
         return r === false ? false : (r ? true : null);
@@ -688,7 +688,7 @@ geotab.addin.dynastyGroupDelete = function () {
       if (results.indexOf(true) >= 0) {
         runDelete(gid, name, iter + 1);
       } else {
-        log('Could not auto-clear the remaining reference(s). Please reassign the affected user(s)/entity(ies) to another group in MyGeotab (Administration > Users), then run Delete again, or contact Dynasty support.', 'err');
+        log('Could not finish. The user(s) listed above only have this group assigned - please assign them another group in MyGeotab, then run Delete again. If it continues, contact Dynasty support.', 'err');
         setBusy(false);
       }
     });
@@ -699,8 +699,8 @@ geotab.addin.dynastyGroupDelete = function () {
       return true;
     }).catch(function (e) {
       var msg = e.message || 'Set failed';
-      if (typeName === 'User' && /AccessGroupFilter/i.test(msg)) {
-        log('  ACTION NEEDED - User "' + label + '" has Advanced Data Access locked to this group (cannot be changed via API). Fix it in Administration > Users > ' + label + ' > Data Access: switch to "Entire Organization" or another group, Save, then run Delete again.', 'err');
+      if (typeName === 'User' && /AccessGroupFilter|CompanyGroups/i.test(msg)) {
+        log('  User "' + label + '" only has this group assigned. Please assign this user another group in MyGeotab, then run Delete again.', 'err');
       } else {
         log('  ' + typeName + ' "' + label + '": ' + msg, 'err');
       }
@@ -708,13 +708,35 @@ geotab.addin.dynastyGroupDelete = function () {
     });
   }
 
+  function filterRefsGroup(f, gid) {
+    if (!f || !f.groupFilterConditions) { return false; }
+    var i, c;
+    for (i = 0; i < f.groupFilterConditions.length; i++) {
+      c = f.groupFilterConditions[i];
+      if (c) {
+        if (c.groupId === gid) { return true; }
+        if (c.groupFilterConditions && filterRefsGroup(c, gid)) { return true; }
+      }
+    }
+    return false;
+  }
+
   function clearEntity(typeName, fields, id, gid) {
     return getEntities(typeName, { id: id }).then(function (rows) {
       var ent = rows && rows[0];
       if (!ent) { return null; }
       var label = ent.name || id;
+
+      // A User whose advanced Data Access (accessGroupFilter) is locked to this
+      // group cannot be re-scoped via the API - Geotab does not allow writing
+      // accessGroupFilter. Flag it for a one-time manual fix and skip the
+      // (doomed) Set, so the log stays accurate.
+      if (typeName === 'User' && filterRefsGroup(ent.accessGroupFilter, gid)) {
+        log('  User "' + label + '" only has this group assigned. Please assign this user another group in MyGeotab, then run Delete again.', 'err');
+        return false;
+      }
+
       var changed = false;
-      var companyChanged = false;
       fields.forEach(function (f) {
         if (Array.isArray(ent[f]) && hasGroup(ent[f], gid)) {
           var filtered = ent[f].filter(function (g) { return g.id !== gid; });
@@ -724,29 +746,13 @@ geotab.addin.dynastyGroupDelete = function () {
           }
           ent[f] = filtered;
           changed = true;
-          if (f === 'companyGroups') { companyChanged = true; }
         }
       });
-      // A User's advanced "Data access" filter (accessGroupFilter) must stay
-      // consistent with companyGroups, or Geotab rejects with "CompanyGroups
-      // must be visible to AccessGroupFilter". Mirror the filter's group list to
-      // the new companyGroups, preserving the original object/condition shape.
-      if (typeName === 'User' && companyChanged && ent.accessGroupFilter &&
-        Array.isArray(ent.accessGroupFilter.groupFilterConditions) &&
-        Array.isArray(ent.companyGroups)) {
-        var template = ent.accessGroupFilter.groupFilterConditions[0] || {};
-        ent.accessGroupFilter.groupFilterConditions = ent.companyGroups.map(function (g) {
-          var cond = {};
-          var k;
-          for (k in template) { if (template.hasOwnProperty(k)) { cond[k] = template[k]; } }
-          cond.groupId = g.id;
-          return cond;
-        });
-        log('  User "' + label + '": synced data-access filter to its groups', 'info');
-      }
       if (!changed) { return null; }
-      log('  cleared ' + typeName + ' "' + label + '"', 'info');
-      return setEntity(typeName, ent, label);
+      return setEntity(typeName, ent, label).then(function (ok) {
+        if (ok) { log('  cleared ' + typeName + ' "' + label + '"', 'info'); }
+        return ok;
+      });
     });
   }
 
