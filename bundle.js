@@ -668,17 +668,26 @@ geotab.addin.dynastyGroupDelete = function () {
           if (f === 'companyGroups') { companyChanged = true; }
         }
       });
-      // Advanced data access: a User's accessGroupFilter tied to the removed
-      // group conflicts with companyGroups ("CompanyGroups must be visible to
-      // AccessGroupFilter"), so clear it - data access then follows companyGroups.
-      if (typeName === 'User' && companyChanged && ent.accessGroupFilter) {
-        ent.accessGroupFilter = null;
-        log('  User "' + (ent.name || id) + '": cleared advanced data-access filter (now uses data scope)', 'info');
+      // Advanced data access: a User's accessGroupFilter must stay consistent
+      // with companyGroups ("CompanyGroups must be visible to AccessGroupFilter").
+      // Setting it null is unreliable, so re-sync the filter to the new
+      // companyGroups - then companyGroups is fully visible to the filter.
+      if (typeName === 'User' && companyChanged && ent.accessGroupFilter && Array.isArray(ent.companyGroups)) {
+        ent.accessGroupFilter = {
+          relation: 'Or',
+          groupFilterConditions: ent.companyGroups.map(function (g) {
+            return { groupId: g.id, isNegated: false };
+          })
+        };
+        log('  User "' + (ent.name || id) + '": re-synced data-access filter to its groups', 'info');
         changed = true;
       }
       if (!changed) { return null; }
       log('  cleared ' + typeName + ' "' + (ent.name || id) + '"', 'info');
-      return rpc('Set', { typeName: typeName, entity: ent });
+      return rpc('Set', { typeName: typeName, entity: ent }).catch(function (e) {
+        e.message = typeName + ' "' + (ent.name || id) + '": ' + e.message;
+        throw e;
+      });
     });
   }
 
