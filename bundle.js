@@ -197,6 +197,16 @@ geotab.addin.dynastyGroupDelete = function () {
     return id === COMPANY_ID || String(id).indexOf(SYSTEM_PREFIX) === 0;
   }
 
+  // Keep only entities whose own groups[] DIRECTLY contains gid (i.e. they
+  // actually reference this group), not everything merely visible in scope.
+  function refsOf(rows, gid) {
+    var out = [];
+    (rows || []).forEach(function (e) {
+      if (e && hasGroup(e.groups, gid)) { out.push(e); }
+    });
+    return out;
+  }
+
   function entName(e) {
     if (!e) { return ''; }
     return e.name || e.serialNumber || (e.firstName ? (e.firstName + ' ' + (e.lastName || '')).trim() : '') || e.id || '';
@@ -459,10 +469,10 @@ geotab.addin.dynastyGroupDelete = function () {
       if (elSelect.value !== gid) { return; }
 
       var cats = [];
-      pushCat(cats, 'Devices', res[0]);
-      pushCat(cats, 'Rules', res[1]);
-      pushCat(cats, 'Zones', res[2]);
-      pushCat(cats, 'Exception rules', res[3]);
+      pushCat(cats, 'Devices', refsOf(res[0], gid));
+      pushCat(cats, 'Rules', refsOf(res[1], gid));
+      pushCat(cats, 'Zones', refsOf(res[2], gid));
+      pushCat(cats, 'Exception rules', refsOf(res[3], gid));
 
       var members = [];
       var drivers = [];
