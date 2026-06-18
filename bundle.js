@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  Dynasty Group Delete Solutions - v4.5
+ *  Dynasty Group Delete Solutions - v4.0
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
  *  NEW in v4.0 (UX restored from the original app):
@@ -512,11 +512,13 @@ geotab.addin.dynastyGroupDelete = function () {
       var drivers = [];
       var advanced = [];
       (res[4] || []).forEach(function (u) {
-        var inCompany = hasGroup(u.companyGroups, gid);
-        if (inCompany && filterRefsGroup(u.accessGroupFilter, gid)) {
-          advanced.push(entName(u));
-        } else if (inCompany) {
-          members.push(entName(u));
+        if (hasGroup(u.companyGroups, gid)) {
+          var remaining = (u.companyGroups || []).filter(function (g) { return g.id !== gid; });
+          if (u.accessGroupFilter && remaining.length === 0) {
+            advanced.push(entName(u));
+          } else {
+            members.push(entName(u));
+          }
         }
         if (hasGroup(u.driverGroups, gid)) { drivers.push(entName(u)); }
       });
@@ -731,7 +733,8 @@ geotab.addin.dynastyGroupDelete = function () {
       // group cannot be re-scoped via the API - Geotab does not allow writing
       // accessGroupFilter. Flag it for a one-time manual fix and skip the
       // (doomed) Set, so the log stays accurate.
-      if (typeName === 'User' && filterRefsGroup(ent.accessGroupFilter, gid)) {
+      if (typeName === 'User' && ent.accessGroupFilter &&
+        (ent.companyGroups || []).filter(function (g) { return g.id !== gid; }).length === 0) {
         log('  User "' + label + '" only has this group assigned. Please assign this user another group in MyGeotab, then run Delete again.', 'err');
         return false;
       }
