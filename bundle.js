@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  Dynasty Group Delete Solutions - v4.0
+ *  Dynasty Group Delete Solutions - v4.5
  *  MyGeotab Add-In (vanilla JS, CSP / Trusted Types compliant)
  *
  *  NEW in v4.0 (UX restored from the original app):
